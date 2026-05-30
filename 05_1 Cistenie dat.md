@@ -1,4 +1,4 @@
-# NLP – Lematizácia a reprezentácia textu dátovou maticou
+# Task 1 – Čistenie dát (Data Cleaning)
 
 ---
 
@@ -6,660 +6,341 @@
 
 ### Základný problém, ktorý skript rieši
 
-Počítač nedokáže pracovať priamo s textom – potrebuje čísla. Každý algoritmus strojového učenia, vyhľadávací systém alebo klasifikátor vyžaduje číselný vstup. Skript rieši tento problém: vezme 5 anglických textových dokumentov a prevedie ich na sústavu číselných matíc, kde každý dokument je reprezentovaný vektorom čísel.
+Apache webový server zapisuje do logu **každý** HTTP požiadavok bez výnimky — od skutočných kliknutí ľudí, cez automatické načítavanie obrázkov a CSS súborov až po požiadavky robotov vyhľadávacích služieb. Surový log je teda zmes signálu a šumu.
 
-Výsledná reprezentácia sa nazýva **Bag of Words** (vak slov) – model, v ktorom nezáleží na poradí slov, iba na tom, ktoré slová sa v texte vyskytujú a ako často. Každý dokument sa stane jedným riadkom matice, každé unikátne slovo (léma) jedným stĺpcom.
+Pre analýzu správania používateľov sú relevantné len záznamy o skutočných navigačných kliknutiach na stránky. Obrázok načítaný na pozadí, chybná požiadavka alebo interný monitorovací skript — to všetko komplikuje analýzu a musí byť odstránené.
 
----
+Skript rieši tento problém v dvoch fázach:
 
-### Prečo lematizácia a nie surové slová?
-
-Anglický text obsahuje morfologické variácie toho istého slova: `running`, `runs`, `ran` sú rôzne formy slovesa `run`. Ak by sme pracovali so surovými slovami, každá forma by zabrala vlastný stĺpec v matici, hoci všetky nesú rovnaký sémantický obsah. Lematizácia redukuje toto "rozptýlenie" – všetky formy sa mapujú na jednu lému `run`, čím sa zmenší rozsah slovníka a matica bude informatívnejšia.
-
-Podobne: `companies` → `company`, `algorithms` → `algorithm`, `glaciers` → `glacier`.
+1. **Parsovanie** — každý textový riadok logu rozloží regulárnym výrazom na štruktúrované polia (stĺpce tabuľky).
+2. **Čistenie v 6 krokoch** — z výslednej tabuľky postupne vymaže záznamy, ktoré nie sú skutočnými kliknutiami návštevníka.
 
 ---
 
-### Vstup
+### Apache Combined Log Format – čo to je a ako vyzerá
 
-Päť textových súborov `text1.txt` – `text5.txt`, každý s anglickým odborným textom z inej oblasti:
-
-| Súbor | Téma | Príklady kľúčových slov |
-|---|---|---|
-| `text1.txt` | Umelá inteligencia a robotika | algorithm, network, robot, learn, train |
-| `text2.txt` | Klimatické zmeny | climate, glacier, carbon, temperature, energy |
-| `text3.txt` | Ľudský mozog a neurológia | brain, neuron, memory, sleep, therapy |
-| `text4.txt` | Vesmírny výskum | space, planet, rocket, galaxy, telescope |
-| `text5.txt` | Globálna ekonomika | inflation, bank, currency, trade, market |
-
-Texty sú zámerne z odlišných domén – slová ako `system`, `new`, `large` sa vyskytujú vo viacerých textoch (→ nízke IDF), zatiaľ čo `glacier`, `neuron`, `exoplanet` sú unikátne pre jeden text (→ vysoké IDF). Toto rozloženie dobre demonštruje, čo TF-IDF meria.
-
-Skript má zabudovanú zálohu: ak textové súbory chýbajú, automaticky ich vytvorí zo vstavených vzorových textov.
-
----
-
-### NLP pipeline – čo sa deje s každým textom
-
-Pre každý z 5 dokumentov prebehne nasledujúca séria transformácií:
+Každý riadok logu opisuje **jeden HTTP požiadavok**. Príklad:
 
 ```
-"Artificial intelligence is transforming the world..."
+5.9.83.211 - - [12/Nov/2017:06:27:01 +0100] "GET /o-nas HTTP/1.1" 200 187383 "-" "Mozilla/5.0 (Windows NT 10.0)"
+```
+
+Polia zľava doprava, s ich názvami v kóde:
+
+```
+5.9.83.211             → IP        (stĺpec 1)
+-                      → Cookie    (stĺpec 2 – RFC 1413 ident, vždy "-", vymažeme)
+-                      → user      (stĺpec 3 – HTTP auth user, vždy "-", vymažeme)
+12/Nov/2017:06:27:01   → DateTime  (stĺpec 4 – v hranatých zátvorkách)
+GET                    → RequestMethod (stĺpec 5)
+/o-nas                 → URL       (stĺpec 6)
+HTTP/1.1               → RequestVersion (stĺpec 7)
+200                    → StatusCode (stĺpec 8)
+187383                 → Bytes     (stĺpec 9 – veľkosť odpovede, vymažeme)
+"-"                    → Referrer  (stĺpec 10 – odkiaľ prišiel používateľ)
+"Mozilla/5.0..."       → Agent     (stĺpec 11 – User-Agent reťazec)
+```
+
+**Prečo Combined a nie Common?**  
+Apache Common Log (starší formát) obsahuje len 7 polí bez `Referrer` a `Agent`. Combined Log pridáva práve tieto dve polia — bez nich by sme nemohli identifikovať robotov (Task 2) ani doplňovať chýbajúce cesty (Task 5).
+
+---
+
+### Vstup a výstup
+
+```
+wm2020projekt_oravec.log
           │
-          ▼  sent_tokenize()
-["Artificial intelligence is transforming the world.", "Machines are learning..."]
-          │
-          ▼  word_tokenize() na každú vetu
-["Artificial", "intelligence", "is", "transforming", "the", "world", ...]
-          │
-          ▼  .lower()
-["artificial", "intelligence", "is", "transforming", "the", "world", ...]
-          │
-          ▼  filter: not in stop_words, isalpha(), len > 2
-["artificial", "intelligence", "transforming", "world", ...]
-          │
-          ▼  lemmatizer.lemmatize()
-["artificial", "intelligence", "transform", "world", ...]
+          │  parse_log_to_dataframe()  ← regulárny výraz na každý riadok
+          │  clean_data()              ← 6 krokov čistenia
+          ▼
+wm2020projekt_cleaned.csv
 ```
 
-Stop slová sú funkčné slová anglického jazyka bez sémantického obsahu: `the`, `is`, `are`, `and`, `of`, `to`, `a`, `in`, `that`, `it` ... NLTK ich má predpripravený zoznam pre desiatky jazykov. Filtrovanie zabezpečí, že v matici skončia len plnovýznamové slová.
-
----
-
-### Čo je slovník (vocabulary) a prečo je dôležitý
-
-Po lematizácii všetkých 5 dokumentov sa zozbierajú **všetky unikátne lémy** naprieč celou kolekciou. Tento zoznam tvorí **slovník** – množinu stĺpcov, ktorá je spoločná pre všetky matice.
-
-Príklad (zjednodušene): ak `text1.txt` dá lémy `{algorithm, network, train}` a `text2.txt` dá `{climate, energy, train}`, slovník bude `{algorithm, climate, energy, network, train}`. Léma `train` je v oboch dokumentoch, ostatné len v jednom.
-
-Dôležité: slovník je **fixný** – rovnaké stĺpce pre všetky matice. Dokument, v ktorom sa léma nevyskytuje, dostane v príslušnom stĺpci hodnotu 0.
-
----
-
-### Štyri rôzne pohľady na tie isté dáta
-
-Z jedného zdrojového TF (frekvenčného) počítadla skript odvodí štyri rôzne numerické reprezentácie, každá s iným zámerom:
-
-**1. TF – absolútna frekvencia**
-Surový počet výskytov. Základ všetkého, ale nevie povedať, či je slovo dôležité – len to, či je časté.
-
-**2. Binárna matica**
-Zahodí frekvenciu, zachová len prítomnosť. Užitočná keď záleží iba na tom, či slovo v texte je alebo nie je (napr. spam filter: buď obsahuje slovo "výhra" alebo nie).
-
-**3. Logaritmická matica**
-Kompromis: zachová informáciu o frekvencii, ale "skrotí" extrémne hodnoty. Slovo s výskytom 1× vs. 100× nie je v logaritmickej škále 100× dôležitejšie, ale len ~6.6×. Tlmí dominanciu slov, ktoré sa opakujú veľa-krát (napr. slovo `said` v rozhovorovom texte).
-
-**4. TF-IDF matica**
-Najsofistikovanejšia. Prináša nový rozmer: nielen ako často sa slovo vyskytuje *v tomto dokumente*, ale aj ako vzácne je *naprieč celou kolekciou*. Slovo, ktoré je časté len v jednom dokumente a zriedkavé vo zvyšných, dostane vysoké skóre – je charakteristické pre daný dokument.
-
----
-
-### Čo skript počíta
-
-Z týchto textov skript odvodí **štyri typy matíc** a jeden pomocný vektor:
-
-1. **TF – frekvenčná matica** – absolútny počet výskytov každej lémy v každom dokumente
-2. **Binárna matica** – iba 0 alebo 1 (vyskytuje sa / nevyskytuje sa)
-3. **Logaritmická matica** – `log10(1 + TF)`, tlmí vplyv veľmi frekventovaných slov
-4. **TF-IDF matica** – TF × IDF, zvýrazňuje slová typické pre konkrétny dokument
-5. **IDF vektor** – inverzná dokumentová frekvencia pre každú lému (nie matica, len 1 riadok hodnôt)
-
----
-
-### Výstup
-
-Všetky výsledky sú zapísané do jedného Excel súboru `lemma_matrices.xlsx` s piatimi listami:
-
-| List | Obsah | Rozsah hodnôt |
-|---|---|---|
-| `TF_frekvencia` | Absolútne frekvencie lém | 0, 1, 2, 3, ... |
-| `Binarna` | 0 / 1 prítomnosť lémy | {0, 1} |
-| `Logaritmicka` | log10(1 + TF) | 0, 1.0, 1.301, 1.477, ... |
-| `TF-IDF` | TF × IDF | 0.0 – typicky do ~5.0 |
-| `IDF` | IDF hodnota pre každú lému (1 stĺpec = 1 léma) | 0 – log10(5) ≈ 0.699 |
-
-### Štruktúra výstupnej matice (príklad z listu TF-IDF)
-
-```
-              algorithm  artificial  climate  glacier  ...  year
-text1.txt        1.398       2.097    0.000    0.000  ...   0.0
-text2.txt        0.000       0.000    0.699    1.398  ...   0.0
-text3.txt        0.000       0.000    0.000    0.000  ...   0.0
-text4.txt        0.000       0.000    0.000    0.000  ...   0.0
-text5.txt        0.000       0.000    0.000    0.000  ...  0.699
-```
-
-- **Riadky** = dokumenty (`text1.txt` – `text5.txt`)
-- **Stĺpce** = unikátne lémy (základné tvary slov) naprieč všetkými dokumentmi – typicky 150–250 stĺpcov
-- **Hodnota bunky** = závisí od listu (TF, 0/1, log-váha, TF-IDF váha)
-- **Nulové hodnoty** = léma sa v danom dokumente nevyskytuje (alebo má IDF = 0 pretože je vo všetkých dok.)
-
-Vysoké TF-IDF hodnoty (`algorithm` v `text1.txt`, `glacier` v `text2.txt`) identifikujú kľúčové slová každého dokumentu – slová, ktoré ho najlepšie charakterizujú voči ostatným.
-
----
-
-## Vstupné a výstupné súbory
-
-```
-text1.txt   ─┐
-text2.txt    │
-text3.txt    ├──► lemmatization.py ──► lemma_matrices.xlsx
-text4.txt    │
-text5.txt   ─┘
-```
+| Súbor | Popis |
+|---|---|
+| `wm2020projekt_oravec.log` | Surový Apache Combined Log, týždeň 12.–18.11.2017 |
+| `wm2020projekt_cleaned.csv` | Očistená tabuľka: `IP`, `DateTime`, `RequestMethod`, `URL`, `RequestVersion`, `StatusCode`, `Referrer`, `Agent` |
 
 ---
 
 ## Postup riešenia – krok za krokom
 
-### 1. Importy a stiahnutie NLTK dát
+### 1. Parsovanie logu regulárnym výrazom – `parse_log_to_dataframe()`
+
+Funkcia číta log riadok po riadku (v C by to bolo `while (fgets(buf, ..., f) != NULL)`). Na každý riadok aplikuje regulárny výraz `LOG_LINE_REGEX`.
+
+#### Regulárny výraz riadok po riadku
 
 ```python
-import os, math
-import nltk
-import pandas as pd
-import numpy as np
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize, sent_tokenize
-from nltk.stem import WordNetLemmatizer
-
-nltk.download('punkt_tab')
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
-nltk.download('stopwords')
-nltk.download('wordnet')
+LOG_LINE_REGEX = re.compile(
+    r'(\S+)'            # sk.  1: IP adresa        – ľubovoľné non-whitespace znaky
+    r' (\S+)'           # sk.  2: Cookie/ident      – vždy "-"
+    r' (\S+)'           # sk.  3: user/auth         – vždy "-"
+    r' \[([^\]]+)\]'    # sk.  4: DateTime          – obsah [...]  bez závoriek
+    r' "(\S+)'          # sk.  5: RequestMethod     – prvé slovo za úvodzovkou
+    r' (\S+)'           # sk.  6: URL               – druhé slovo (bez medzier)
+    r' ([^"]+)"'        # sk.  7: RequestVersion    – zvyšok do uzatváracej "
+    r' (\d{3})'         # sk.  8: StatusCode        – presne 3 číslice
+    r' (\S+)'           # sk.  9: Bytes             – číslo alebo "-"
+    r' "([^"]*)"'       # sk. 10: Referrer          – obsah v úvodzovkách (môže byť prázdny)
+    r' "([^"]*)"'       # sk. 11: Agent             – User-Agent reťazec
+)
 ```
 
-| Knižnica / modul | Účel |
-|---|---|
-| `os`, `math` | Práca so súbormi, matematika (log10) |
-| `nltk` | Natural Language Toolkit – NLP nástroje |
-| `pandas` | Práca s DataFrame (tabuľková matica) |
-| `numpy` | Vektorizované matematické operácie |
-| `stopwords` | Zoznamy stop slov (the, is, and...) |
-| `word_tokenize`, `sent_tokenize` | Rozdelenie textu na slová / vety |
-| `WordNetLemmatizer` | Lematizátor – prevod na základný tvar |
+**Vysvetlenie kľúčových regex prvkov:**
 
-NLTK pri prvom spustení stiahne potrebné jazykové modely: tokenizačné pravidlá (`punkt`), databázu anglických slov (`wordnet`) a zoznam stop slov.
-
----
-
-### 2. Inicializácia
-
-```python
-stop_words = set(stopwords.words('english'))
-lemmatizer = WordNetLemmatizer()
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-```
-
-- `set(...)` – stop slová uložíme do **množiny (set)**, lebo vyhľadávanie v sete je O(1) – každé slovo pri filtrovaní sa porovnáva v konštantnom čase, nie lineárne
-- `WordNetLemmatizer()` – vytvoríme jeden objekt lematizátora, ktorý sa použije opakovane pre všetky slová všetkých dokumentov
-- `SCRIPT_DIR` – absolútna cesta k priečinku skriptu, aby fungoval nezávisle od toho, odkiaľ ho spustíme
-
----
-
-### 3. Načítanie textov
-
-```python
-documents = {}
-for fname in TEXT_FILES:
-    fpath = os.path.join(SCRIPT_DIR, fname)
-    with open(fpath, 'r', encoding='utf-8') as f:
-        documents[fname] = f.read()
-```
-
-- `documents` = slovník `{ 'text1.txt': 'celý text...', ... }` – každý dokument je reťazec
-- `encoding='utf-8'` – správne načítanie špeciálnych znakov
-
----
-
-### 4. Tokenizácia a lematizácia – funkcia `extract_lemmas`
-
-Toto je **jadro skriptu**. Funkcia dostane jeden text a vráti zoznam lém (základných tvarov slov).
-
-```python
-def extract_lemmas(text):
-    lemmas = []
-    tokenized = sent_tokenize(text)          # Krok 1: text → vety
-    for word in tokenized:
-        wordsList = nltk.word_tokenize(word) # Krok 2: veta → tokeny
-        for w in wordsList:
-            w_lower = w.lower()
-            if (w_lower not in stop_words    # filter 1: stop slová
-                and w_lower.isalpha()        # filter 2: len písmená
-                and len(w_lower) > 2):       # filter 3: min. dĺžka
-                lemma_word = lemmatizer.lemmatize(w_lower)  # Krok 4: lema
-                lemmas.append(lemma_word)
-    return lemmas
-```
-
-**Krok 1 – `sent_tokenize(text)`**: rozdelí text na zoznam viet podľa interpunkcie (`.`, `!`, `?`). Dôvod: lematizátor pracuje lepšie, keď pozná kontext vety.
-
-**Krok 2 – `word_tokenize(veta)`**: rozdelí vetu na jednotlivé tokeny (slová + interpunkcia). Napríklad `"I'm running"` → `["I", "'m", "running"]`.
-
-**Krok 3 – trojité filtrovanie**:
-- `w_lower not in stop_words` – vylúčime funkčné slová bez sémantického obsahu (the, is, are, and, of...)
-- `w_lower.isalpha()` – vylúčime čísla, interpunkciu, URL, špeciálne znaky
-- `len(w_lower) > 2` – vylúčime príliš krátke slová (a, to, of – zvyčajne sú to stop slová, ale nie všetky)
-
-**Krok 4 – `lemmatizer.lemmatize(w_lower)`**: konvertuje slovo na jeho základný slovníkový tvar (lemu):
-
-| Vstupné slovo | Léma |
-|---|---|
-| running | run |
-| companies | company |
-| developing | develop |
-| glaciers | glacier |
-| algorithms | algorithm |
-
-**Rozdiel Lematizácia vs. Stemming:**
-
-| Vlastnosť | Lematizácia | Stemming |
+| Vzor | Popis | Prečo takto |
 |---|---|---|
-| Výstup | Skutočné slovníkové slovo | Orezaná prípona (nemusí byť slovo) |
-| Príklad | `running` → `run` | `running` → `runn` |
-| Príklad | `better` → `good` | `better` → `better` |
-| Rýchlosť | Pomalšia | Rýchlejšia |
-| Presnosť | Vyššia | Nižšia |
-| Požiadavka | Potrebuje WordNet databázu | Jednoduchý algoritmus |
+| `\S+` | 1+ non-whitespace znakov | IP, metóda, URL neobsahujú medzery |
+| `\[([^\]]+)\]` | Obsah `[...]` – `[^\]]+` = akýkoľvek znak okrem `]` | DateTime je ohraničený `[` a `]` |
+| `([^"]+)"` | Znaky iné ako `"`, ukončené `"` | Zachytí `HTTP/1.1` medzi metódou a `"` |
+| `(\d{3})` | Presne 3 číslice | StatusCode je vždy 3-ciferný (200, 404, ...) |
+| `"([^"]*)"` | Obsah v `"..."` – `*` = môže byť aj prázdny | Referrer môže byť `-` alebo URL |
 
----
+**Prečo `re.compile()` pred cyklom, nie `re.match()` priamo?**  
+`re.compile()` skompiluje vzor raz do internej formy. Pre milióny riadkov logu je rozdiel dramatický — regex engine preloží vzor raz a pri každom `.match()` ho len aplikuje, nestráca čas opätovnou kompiláciou.
 
-### 5. Slovník unikátnych lém
+**Prečo `.match()` a nie `.search()`?**  
+`.match()` hľadá zhodu len **od začiatku** reťazca — čo je správne, lebo každý riadok Apache logu začína IP adresou. `.search()` by prehľadal celý reťazec a našiel by zhodu kdekoľvek, čo je pomalé a zbytočné.
 
-```python
-all_lemmas = sorted(set(l for lemmas in doc_lemmas.values() for l in lemmas))
+#### Celý tok parsingu
+
+```
+Textový riadok logu:
+"5.9.83.211 - - [12/Nov/2017:06:27:01 +0100] "GET /o-nas HTTP/1.1" 200 187383 "-" "Mozilla/5.0""
+                │
+                ▼  LOG_LINE_REGEX.match(line.strip())
+                │
+      ┌─── Zhoda? Nie ───►  continue  (prázdny riadok, komentar, ...)
+      │
+      └─── Zhoda? Áno ───►  m.group(1)  = "5.9.83.211"
+                            m.group(4)  = "12/Nov/2017:06:27:01 +0100"
+                            m.group(5)  = "GET"
+                            m.group(6)  = "/o-nas"
+                            m.group(8)  = "200"  → int("200") = 200
+                            ...
+                            record = { "IP": "5.9.83.211", "DateTime": ..., ... }
+                            records.append(record)
+                │
+                ▼  (po prečítaní celého súboru)
+        pd.DataFrame(records)
+                │
+                ▼
+        DataFrame: jeden riadok = jeden HTTP požiadavok
 ```
 
-- **generátorový výraz** `l for lemmas in doc_lemmas.values() for l in lemmas` – prechádza cez lémy všetkých dokumentov naraz (dvojitý for v jednom výraze)
-- `set(...)` – odstráni duplicity, každá léma je zastúpená len raz
-- `sorted(...)` – zoradí abecedne → stĺpce matíc budú vždy v rovnakom deterministickom poradí
-
-Výsledok: `all_lemmas` je zoznam napr. 150–200 unikátnych slov, ktoré tvoria **stĺpce** všetkých matíc.
-
 ---
 
-### 6. TF – frekvenčná matica
+### 2. Vymazanie nepotrebných stĺpcov (Krok 1)
 
 ```python
-tf_matrix = pd.DataFrame(0, index=doc_names, columns=all_lemmas)
-
-for doc_name, lemmas in doc_lemmas.items():
-    for lemma in lemmas:
-        tf_matrix.loc[doc_name, lemma] += 1
+df.drop(columns=["Cookie", "user", "Bytes"], inplace=True)
 ```
 
-- Vytvoríme DataFrame naplnený nulami, kde riadky sú dokumenty a stĺpce sú lémy
-- Pre každý dokument prechádzame jeho lémy a inkrementujeme príslušnú bunku
-- `tf_matrix.loc[doc_name, lemma]` – prístup k bunke cez **label-based indexing**
+**Prečo práve tieto tri:**
 
-Výsledok: matica s **absolútnymi frekvenciami** – koľkokrát sa daná léma vyskytuje v danom dokumente.
+- `Cookie` (stĺpec 2 v logu, RFC 1413 identita) — na modernom internete sa nepoužíva, hodnota je vždy `-`. Nenesie žiadnu informáciu.
+- `user` (stĺpec 3, HTTP Basic Auth používateľ) — web UKF nepoužíva HTTP autentifikáciu, vždy `-`.
+- `Bytes` (stĺpec 9, veľkosť odpovede) — pre analýzu navigačného správania bezvýznamné. Analýza sa zaujíma o *kde* používateľ bol, nie o veľkosť odpovede.
+
+**`inplace=True`** — modifikuje DataFrame priamo v pamäti namiesto vytvorenia kópie. Ekvivalent `df = df.drop(...)`, ale efektívnejší.
 
 ---
 
-### 7. Binárna matica
+### 3. Filtrovanie podľa StatusCode (Krok 2)
 
 ```python
-binary_matrix = (tf_matrix > 0).astype(int)
+KEEP_STATUS_CODES = [200, 206, 304]
+before = len(df)
+df = df[df["StatusCode"].isin(KEEP_STATUS_CODES)]
 ```
 
-- `(tf_matrix > 0)` – porovnanie každej bunky s nulou, výsledok je DataFrame s hodnotami `True`/`False`
-- `.astype(int)` – konverzia: `True → 1`, `False → 0`
-- Celá operácia je **vektorizovaná** – pandas ju aplikuje na celú maticu naraz bez cyklu
+**Ktoré kódy zachováme a prečo:**
 
----
-
-### 8. Logaritmická matica
-
-```python
-log_matrix = tf_matrix.apply(lambda col: col.map(lambda x: round(math.log10(1 + x), 4)))
-```
-
-- `tf_matrix.apply(lambda col: ...)` – prechádza každý **stĺpec** (lemu) ako pandas Series
-- `col.map(lambda x: ...)` – aplikuje funkciu na každú **bunku** v stĺpci
-- `math.log10(1 + x)` – aplikuje logaritmický vzorec
-- `round(..., 4)` – zaokrúhlenie na 4 desatinné miesta
-
----
-
-### 9. IDF a TF-IDF matica
-
-```python
-N = len(doc_names)
-df_series  = (tf_matrix > 0).sum(axis=0)
-idf_series = df_series.apply(lambda df: round(math.log10(N / df), 4) if df > 0 else 0)
-tfidf_matrix = tf_matrix.multiply(idf_series, axis=1).round(4)
-```
-
-**Riadok 1:** `N = 5` – celkový počet dokumentov.
-
-**Riadok 2:** `(tf_matrix > 0).sum(axis=0)` – pre každú lému spočíta, v koľkých dokumentoch sa vyskytuje:
-- `(tf_matrix > 0)` – boolovská matica True/False
-- `.sum(axis=0)` – sumuje **po stĺpcoch** (cez riadky/dokumenty); `True` sa počíta ako 1
-- Výsledok: `df_series` je Series s jednou hodnotou (document frequency) na každú lému
-
-**Riadok 3:** IDF pre každú lému; podmienka `if df > 0 else 0` chráni pred delením nulou.
-
-**Riadok 4:** `tf_matrix.multiply(idf_series, axis=1)` – násobí každý **stĺpec** matice príslušnou IDF hodnotou; `axis=1` (alebo `axis='columns'`) hovorí pandasom, aby zarovnal IDF vektor podľa stĺpcov.
-
----
-
-### 10. Export do Excelu
-
-```python
-OUTPUT_FILE = os.path.join(SCRIPT_DIR, 'lemma_matrices.xlsx')
-with pd.ExcelWriter(OUTPUT_FILE, engine='openpyxl') as writer:
-    tf_matrix.to_excel(writer,     sheet_name='TF_frekvencia')
-    binary_matrix.to_excel(writer, sheet_name='Binarna')
-    log_matrix.to_excel(writer,    sheet_name='Logaritmicka')
-    tfidf_matrix.to_excel(writer,  sheet_name='TF-IDF')
-    idf_df = idf_series.reset_index()
-    idf_df.columns = ['Lema', 'IDF']
-    idf_df.to_excel(writer,        sheet_name='IDF', index=False)
-```
-
-- `pd.ExcelWriter` použitý ako **context manager** (`with`) – súbor sa automaticky správne zatvorí a uloží aj pri chybe
-- `engine='openpyxl'` – knižnica zodpovedná za zápis do formátu `.xlsx`
-- `idf_series.reset_index()` – prevedie pandas Series na DataFrame (pridá stĺpec s názvami lém ako index)
-
----
-
-## Štatistické metódy a vzorce
-
-### 1. TF – Term Frequency (absolútna frekvencia)
-
-$$
-TF(d,\, t) = \text{počet výskytov lémy } t \text{ v dokumente } d
-$$
-
-kde $d$ = dokument, $t$ = term (léma).
-
-**Čo reprezentuje:** Koľkokrát sa dané slovo objaví v texte. Základná miera relevancie.
-
-**Výhoda:** Jednoduchosť, priama interpretácia.
-
-**Nevýhoda:** Dlhší dokument bude mať vyššie TF pre všetky slová, aj keď nie je "viac o téme". Navyše bežné slová (aj po odstránení stop slov) môžu dominovať.
-
----
-
-### 2. Binárna reprezentácia
-
-$$
-bin(d,\, t) =
-\begin{cases}
-1 & \text{ak } TF(d, t) > 0 \\
-0 & \text{inak}
-\end{cases}
-$$
-
-**Čo reprezentuje:** Iba prítomnosť alebo neprítomnosť lémy. Nezáleží na počte výskytov.
-
-**Príklad:** Léma `algorithm` sa v `text1.txt` vyskytuje 5-krát → binárna hodnota = **1**.
-
-**Výhoda:** Extrémne jednoduchá, rýchla.
-
-**Nevýhoda:** Stratí sa celá informácia o frekvencii – slovo s výskytom 1× a 100× majú rovnakú váhu 1.
-
----
-
-### 3. Logaritmická TF
-
-$$
-\log TF(d,\, t) =
-\begin{cases}
-1 + \log_{10}(TF(d,\, t)) & \text{ak } TF(d, t) > 0 \\
-0 & \text{inak}
-\end{cases}
-$$
-
-**Prečo +1:** Bez +1 by platilo $\log_{10}(1) = 0$, čo by dalo hodnotu 0 slovu s jedným výskytom – rovnako ako slovu, ktoré sa nevyskytuje vôbec. Posun o 1 zaručuje $\log TF > 0$ pre každé slovo, ktoré sa vyskytuje.
-
-**Prečo logaritmus:** Surová frekvencia rastie lineárne, ale jej *informatívna hodnota* rastie oveľa pomalšie. Logaritmus "skrotí" rozsah hodnôt:
-
-| TF (surové) | $\log_{10}(TF)$ | $1 + \log_{10}(TF)$ |
+| Kód | Názov | Dôvod zachovania |
 |---|---|---|
-| 1 | 0 | 1.000 |
-| 10 | 1 | 2.000 |
-| 100 | 2 | 3.000 |
-| 1 000 | 3 | 4.000 |
+| `200` | OK | Štandardná úspešná odpoveď — stránka bola zobrazená |
+| `206` | Partial Content | Čiastočný obsah — streaming videa/audia; reálna akcia |
+| `304` | Not Modified | Prehliadač použil cache — kliknutie bolo **skutočné**, len server nemusel znova poslať obsah |
 
-Slovo s TF = 100 je len **3×** dôležitejšie (nie 100×) ako slovo s TF = 1.
+**Prečo zachovávame 304? (dôležitá otázka na skúšku)**  
+`304 Not Modified` vznikne takto: prehliadač pošle požiadavok so záhlavím `If-Modified-Since: <čas posledného načítania>`. Server porovná a ak sa stránka nezmenila, odpovie `304` — telo odpovede je prázdne, používateľ dostane stránku z cache. Používateľ **naozaj klikol** — iba obsah nebol znova preposlaný. Keby sme `304` vymazali, prišli by sme o reálne kliknutia.
+
+**Čo vyradíme:**
+
+| Skupina | Príklady | Dôvod vymazania |
+|---|---|---|
+| `1xx` | `100 Continue` | Informatívne odpovede, nie dokončené požiadavky |
+| `4xx` | `404 Not Found`, `403 Forbidden` | Stránka neexistuje alebo zakázaná — žiadny obsah nebol zobrazený |
+| `5xx` | `500 Internal Server Error` | Chyba servera — používateľ nevidel obsah |
 
 ---
 
-### 4. IDF – Inverse Document Frequency (inverzná dokumentová frekvencia)
+### 4. Filtrovanie podľa RequestMethod (Krok 3)
 
-$$
-IDF(t) = \log_{10}\left(\frac{N}{df(t)}\right)
-$$
+```python
+KEEP_METHODS = ["GET"]
+df = df[df["RequestMethod"].isin(KEEP_METHODS)]
+```
 
-kde:
-- $N$ = celkový počet dokumentov v kolekcii (tu: 5)
-- $df(t)$ = document frequency = počet dokumentov, v ktorých sa léma $t$ vyskytuje (má TF > 0)
+**Porovnanie HTTP metód:**
 
-**Čo reprezentuje:** Ako **vzácna** je léma naprieč celou kolekciou. Čím vzácnejšia, tým vyššie IDF.
-
-**Limitné prípady (dôležité pre skúšku):**
-
-| Situácia | Výpočet | IDF | Interpretácia |
+| Metóda | Popis | Zachováme? | Dôvod |
 |---|---|---|---|
-| Léma je vo **všetkých** dokumentoch ($df = N$) | $\log_{10}(5/5) = \log_{10}(1)$ | **0** | Neinformatívna – nedokáže odlíšiť dokumenty |
-| Léma je v **jedinom** dokumente ($df = 1$) | $\log_{10}(5/1) = \log_{10}(5)$ | **max ≈ 0.699** | Unikátna – maximálna diskriminačná sila |
-| Léma je v **polovici** dokumentov ($df = N/2$) | $\log_{10}(2)$ | **≈ 0.301** | Stredná diskriminačná sila |
-
-**Kód výpočtu:**
-```python
-df_series  = (tf_matrix > 0).sum(axis=0)
-idf_series = df_series.apply(lambda df: round(math.log10(N / df), 4) if df > 0 else 0)
-```
-
-- `(tf_matrix > 0)` → boolovská matica
-- `.sum(axis=0)` → pre každý stĺpec (lému) spočíta, v koľkých riadkoch (dokumentoch) je True
-- `if df > 0 else 0` → ochrana pred `log10(5/0) = log10(∞)`
+| `GET` | Požiadavok na načítanie stránky/zdroja | **ÁNO** | Navigačné kliknutia |
+| `POST` | Odoslanie dát formulára na server | **NIE** | Nie je navigácia — prihlásenie, odoslanie komentára |
+| `HEAD` | Kontrolný požiadavok — len záhlavie, bez tela | **NIE** | Automatické kontroly dostupnosti, nie kliknutia |
 
 ---
 
-### 5. TF-IDF
+### 5. Vymazanie statických súborov (Krok 4)
 
-$$
-TFIDF(d,\, t) = TF(d,\, t) \times IDF(t) = TF(d,\, t) \times \log_{10}\left(\frac{N}{df(t)}\right)
-$$
-
-V implementácii je TF-IDF vypočítané z **absolútneho TF** (nie z logaritmického):
+Každá webová stránka pri načítaní vyvolá desiatky sekundárnych požiadavkov na obrázky, CSS, JavaScript — tieto záznamy zaplaví log, ale **nepredstavujú navigačné kliknutie**. Načítavajú sa automaticky.
 
 ```python
-tfidf_matrix = tf_matrix.multiply(idf_series, axis=1).round(4)
+STATIC_FILE_PATTERN = (
+    r'\.(?:bmp|jpe?g|png|gif|css|flv|ico|swf|rss|xml|cur|js|json|svg'
+    r'|woff2?|eot|ttf|otf)(?:\?.*)?$'
+)
+mask_static = df["URL"].str.contains(STATIC_FILE_PATTERN, case=False, regex=True, na=False)
+df = df[~mask_static]
 ```
 
-**Čo reprezentuje:** Dôležitosť lémy v konkrétnom dokumente *relatívne voči celej kolekcii*. Slovo musí byť:
-- **Časté** v danom dokumente (vysoké TF), **A zároveň**
-- **Vzácne** v ostatných dokumentoch (vysoké IDF)
+**Rozbor regex vzoru:**
 
-**Príklady interpretácie:**
-
-| Situácia | TF | IDF | TF-IDF | Záver |
-|---|---|---|---|---|
-| Slovo časté v 1 dok., vzácne inde | Vysoké | Vysoké | **Vysoké** | Kľúčové slovo dokumentu |
-| Slovo časté vo VŠETKÝCH dok. | Vysoké | 0 | **0** | Neinformatívne |
-| Slovo vzácne v 1 dok. | Nízke | Vysoké | **Nízke** | Marginálny výskyt |
-
----
-
-## Vysvetlenie kľúčových operácií v kóde
-
-### `axis=0` vs `axis=1`
-
-```
-            léma1  léma2  léma3
-text1.txt     3      0      1
-text2.txt     0      2      4
-text3.txt     1      1      0
-
-axis=0: sumujeme NADOL (cez riadky) → výsledok = 1 hodnota na STĹPEC
-        → [4, 3, 5]   (document frequency pre každú lému)
-
-axis=1: sumujeme DOPRAVA (cez stĺpce) → výsledok = 1 hodnota na RIADOK
-        → [4, 6, 2]   (celkový počet lém v každom dokumente)
-```
-
-### `apply` + `map` vs `multiply`
-
-- `tf_matrix.apply(lambda col: col.map(lambda x: ...))` – aplikuje vlastnú Python funkciu na každú bunku; flexibilné, ale pomalšie (Python overhead)
-- `tf_matrix.multiply(idf_series, axis=1)` – čistá pandas/numpy operácia; automatické zarovnanie podľa stĺpcov (broadcasting); rýchlejšie
-
-### Ochrana pred delením nulou
-
-```python
-idf_series = df_series.apply(lambda df: round(math.log10(N / df), 4) if df > 0 else 0)
-```
-
-Podmienka `if df > 0 else 0` zabezpečí, že ak by sa léma nevyskytovala v žiadnom dokumente (čo sa tu nemôže stať, ale je to obranný kód), nevyhodí sa `ZeroDivisionError`. Ak skript spustíme nad prázdnymi súbormi, nezlyhá.
-
-### `os.path.join` a `os.path.abspath`
-
-```python
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-fpath = os.path.join(SCRIPT_DIR, fname)
-```
-
-- `__file__` = cesta k aktuálnemu `.py` súboru
-- `os.path.abspath(...)` = prevod na absolútnu cestu (funguje aj pri relatívnych cestách)
-- `os.path.dirname(...)` = extrakcia priečinka (bez názvu súboru)
-- `os.path.join(...)` = zostavenie cesty kompatibilne so všetkými OS (Windows používa `\`, Unix `/`)
-
----
-
-## Code flow – diagram
-
-```
-START
-  │
-  ├─► Stiahnutie NLTK dát (punkt, wordnet, stopwords)
-  │
-  ├─► Načítanie text1.txt – text5.txt → documents {}
-  │
-  ├─► Pre každý dokument: extract_lemmas(text)
-  │     ├─ sent_tokenize → vety
-  │     ├─ word_tokenize → tokeny
-  │     ├─ .lower() + filtrovanie (stop slová, isalpha, dĺžka)
-  │     └─ lemmatizer.lemmatize → lémy
-  │
-  ├─► all_lemmas = sorted(set( všetky lémy ))
-  │
-  ├─► tf_matrix  ← počítadlo výskytov lém (riadky=dok., stĺpce=lémy)
-  ├─► binary_matrix = (tf_matrix > 0).astype(int)
-  ├─► log_matrix = apply( log10(1 + TF) )
-  ├─► df_series  = (tf_matrix > 0).sum(axis=0)
-  ├─► idf_series = log10(N / df)
-  └─► tfidf_matrix = tf_matrix × idf_series
-        │
-        └─► ExcelWriter → lemma_matrices.xlsx (5 listov)
-END
-```
-
----
-
-## Porovnanie všetkých reprezentácií
-
-| Vlastnosť | TF | Binárna | Logaritmická TF | TF-IDF |
-|---|---|---|---|---|
-| Rozsah hodnôt | $[0, \infty)$ | $\{0, 1\}$ | $[0, \infty)$ | $[0, \infty)$ |
-| Zachováva frekvenciu? | Áno (lineárne) | Nie | Áno (log-škála) | Áno (log-škála) |
-| Zohľadňuje vzácnosť slova? | Nie | Nie | Nie | **Áno** |
-| Penalizuje bežné slová? | Nie | Nie | Nie | **Áno** |
-| Typické použitie | Základná analýza | Boolean retrieval | Vyhľadávanie | Štandard v IR |
-
----
-
-## Otázky, ktoré môže položiť profesor
-
-**Q: Čo je tokenizácia a prečo delíme najprv na vety?**
-A: Tokenizácia je rozbitie textu na menšie časti (tokeny). Delíme najprv na vety pomocou `sent_tokenize`, pretože niektoré NLP nástroje (napr. tagger slovných druhov) pracujú presnejšie v kontexte celej vety. Potom každú vetu rozdelíme na slová pomocou `word_tokenize`.
-
----
-
-**Q: Čo je lematizácia a čím sa líši od stemmingu?**
-A: **Lematizácia** konvertuje slovo na jeho základný slovníkový tvar (lemu) s použitím gramatických pravidiel a databázy WordNet. Výsledok je vždy platné slovo (`running → run`, `better → good`). **Stemming** len mechanicky odrežie príponu pomocou heuristík – výsledok nemusí byť platné slovo (`running → runn`). Lematizácia je presnejšia, ale pomalšia.
-
----
-
-**Q: Prečo filtrujem stop slová, krátke slová a nealfabetické tokeny?**
-A: **Stop slová** (the, is, are, and...) sú funkčné slová bez sémantického obsahu – nemôžu odlíšiť dokumenty od seba. **Krátke slová** (< 3 znaky) sú zvyčajne predložky alebo zámenká, ktoré nesú málo informácie. **Nealfabetické tokeny** (čísla, interpunkcia, URL) by "znečistili" slovník nepotrebnými symbolmi.
-
----
-
-**Q: Prečo TF a nie raw word count?**
-A: TF a raw count sú tu to isté – oba sú absolútne počty výskytov. Surová frekvencia má nevýhodu, že dlhší dokument bude mať prirodzene vyššie TF pre všetky slová. Preto sa v pokročilejších systémoch TF normalizuje dĺžkou dokumentu. V tomto skripte sa normalizácia nerobí – pracujeme so surovým TF a kompenzujeme pomocou log-škálovania a IDF.
-
----
-
-**Q: Prečo pri log TF používame +1?**
-A: Bez +1 by platilo $\log_{10}(1) = 0$, čo by dalo váhu 0 slovu s jedným výskytom – rovnako ako slovu s výskytom 0. Posun o +1 zaručí $1 + \log_{10}(1) = 1$, čo správne odlíši prítomnosť od neprítomnosti.
-
----
-
-**Q: Čo sa stane, ak $df = N$ (léma je vo všetkých dokumentoch)?**
-A: $IDF = \log_{10}(N/N) = \log_{10}(1) = 0$. TF-IDF bude nulové pre všetky dokumenty. Léma nedokáže odlíšiť dokumenty medzi sebou – nemá diskriminačnú silu.
-
----
-
-**Q: Čo sa stane, ak $df = 1$ (léma je iba v jednom dokumente)?**
-A: $IDF = \log_{10}(N/1) = \log_{10}(5) \approx 0.699$. Léma dostane maximálnu IDF hodnotu – je unikátna pre daný dokument, čo je veľmi informatívne. TF-IDF bude v tomto dokumente vysoké a v ostatných nulové.
-
----
-
-**Q: Čo znamená `axis=0` pri `.sum(axis=0)`?**
-A: `axis=0` znamená sumovanie **smerom nadol** – teda cez riadky (dokumenty). Pre každý stĺpec (lému) dostaneme jeden súčet. Výsledkom je Series s jednou hodnotou na každú lému. `axis=1` by sumovalo cez stĺpce – výsledkom by bolo jedno číslo na každý dokument.
-
----
-
-**Q: Prečo ukladáme štyri rôzne matice namiesto jednej?**
-A: Každá reprezentácia je vhodná pre inú úlohu:
-- **TF** = základná analýza, vstup pre ďalšie výpočty
-- **Binárna** = keď záleží len na prítomnosti (Boolean vyhľadávanie, spam filter)
-- **Logaritmická TF** = keď záleží na frekvencii, ale chceme potlačiť dominanciu veľmi frekventovaných slov
-- **TF-IDF** = keď chceme zvýrazniť charakteristické slová každého dokumentu (vyhľadávanie, klasifikácia, zhlukovanie)
-
----
-
-**Q: Prečo `multiply(idf_series, axis=1)` a nie priame `*`?**
-A: `idf_series` je jednorozmerný vektor (Series) s hodnotou pre každú lému. Pri použití `*` by pandas mohol zarovnávať indexy nesprávne. `multiply(..., axis=1)` explicitne hovorí: "zarovnaj tento vektor podľa **stĺpcov** matice" – každý stĺpec matice (každá léma) sa vynásobí príslušnou IDF hodnotou. Je to pandas Broadcasting.
-
----
-
-**Q: Aký je rozdiel medzi `apply` a `map`?**
-A: `df.apply(func)` aplikuje funkciu na **stĺpec alebo riadok** (Series). `series.map(func)` aplikuje funkciu na každý **element** Series. V kóde sú kombinované: `apply` prechádza stĺpce, `map` aplikuje vzorec na každú bunku v stĺpci.
-
----
-
-**Q: Prečo sa používa `set()` na stop slová?**
-A: Vyhľadávanie v `set` je O(1) – konštantný čas, nezávislý od počtu stop slov. V `list` by bolo O(n). Keďže filtrovanie prebehne pre každé slovo každého dokumentu, ide o tisíce porovnaní – set je výrazne efektívnejší.
-
----
-
-**Q: Čo je `doc_frequency` a ako sa líši od `term_frequency`?**
-A:
-- **Term Frequency** (TF) – koľkokrát sa slovo vyskytuje **v konkrétnom dokumente**; závisí od dokumentu aj slova
-- **Document Frequency** (df) – v koľkých dokumentoch sa slovo vôbec vyskytuje; závisí iba od slova, nie od konkrétneho dokumentu. Používa sa na výpočet IDF.
-
----
-
-## Zhrnutie najdôležitejších funkcií
-
-| Funkcia / operácia | Modul | Účel |
+| Časť vzoru | Čo zachytí | Príklad |
 |---|---|---|
-| `sent_tokenize(text)` | `nltk` | Rozdelenie textu na vety |
-| `word_tokenize(veta)` | `nltk` | Rozdelenie vety na tokeny (slová + interpunkcia) |
-| `lemmatizer.lemmatize(slovo)` | `nltk.stem` | Prevod slova na základný tvar (lemu) |
-| `stopwords.words('english')` | `nltk.corpus` | Zoznam stop slov pre angličtinu |
-| `set(...)` | Python | Množina pre O(1) vyhľadávanie |
-| `str.isalpha()` | Python | True ak reťazec obsahuje iba písmená |
-| `pd.DataFrame(0, index=..., columns=...)` | `pandas` | Vytvorenie matice naplnenej nulami |
-| `df.loc[riadok, stlpec]` | `pandas` | Label-based prístup k bunke |
-| `(df > 0).astype(int)` | `pandas` | Boolovská maska prevedená na 0/1 |
-| `df.apply(lambda col: col.map(...))` | `pandas` | Aplikácia funkcie na každú bunku |
-| `(df > 0).sum(axis=0)` | `pandas` | Počet nenulových hodnôt v každom stĺpci |
-| `df.multiply(series, axis=1)` | `pandas` | Násobenie matice vektorom po stĺpcoch |
-| `math.log10(x)` | `math` | Logaritmus base 10 |
-| `series.reset_index()` | `pandas` | Prevod Series na DataFrame |
-| `pd.ExcelWriter(...)` | `pandas` | Zápis viacerých listov do jedného xlsx |
+| `jpe?g` | `jpg` aj `jpeg` (znak `?` = predchádzajúci znak nepovinný) | `/foto.jpg`, `/scan.jpeg` |
+| `woff2?` | `woff` aj `woff2` (fonty) | `/font.woff`, `/font.woff2` |
+| `(?:\?.*)?$` | Voliteľný query string za príponou | `/style.css?ver=5.9.3` |
+| `(?:...)` | Nekaptúrujúca skupina | Zabraňuje `UserWarning` v pandas |
 
+**Prečo `(?:...)` namiesto `(...)`?**  
+Pandas `str.contains()` pri kaptúrujúcich skupinách `(...)` vypíše `UserWarning: This pattern has match groups`. Nekaptúrujúca skupina `(?:...)` sa správa rovnako pre matching, ale nepamätá si zachytený text — pandas preto nevypíše varovanie.
+
+**Prečo `case=False`?**  
+URL `/foto.JPG` a `/foto.jpg` sú oba statické súbory. Bez `case=False` by `.JPG` prešlo cez filter a zostalo v dátach.
+
+**Prečo `na=False`?**  
+Ak je v stĺpci URL hodnota `NaN` (chýbajúca), `str.contains()` by vrátil `NaN` namiesto `True`/`False`. `na=False` hovorí: "pre chýbajúce URL vráť `False`" — teda nezachyť ich ako statické súbory.
+
+---
+
+### 6. Vymazanie interného monitoringu (Krok 5 – Čistenie II)
+
+```python
+NAVBAR_URL = "/navbar/navbar-ukf.html"
+mask_navbar = df["URL"].str.contains(NAVBAR_URL, regex=False, na=False)
+df = df[~mask_navbar]
+```
+
+Po analýze dát sa ukázalo, že URL `/navbar/navbar-ukf.html` sa v logu opakuje tisíckrát. Ide o **interný monitoring šablóny webu UKF** — automatický požiadavok serverovej infraštruktúry, ktorý overuje dostupnosť navigačnej lišty. Nie je to kliknutie žiadneho návštevníka.
+
+**Prečo `regex=False`?**  
+Pre pevný textový reťazec je `regex=False` výrazne rýchlejšie — pandas vykoná priame porovnanie reťazcov namiesto spúšťania regexového enginu.
+
+---
+
+### 7. Kontrolná štatistika (Krok 6 – Čistenie II)
+
+```python
+print(df["RequestMethod"].value_counts().to_string())
+print(df["StatusCode"].value_counts().to_string())
+print(df["RequestVersion"].value_counts().to_string())
+```
+
+`value_counts()` spočíta výskyt každej unikátnej hodnoty v stĺpci a zoradí ich zostupne. Slúži ako **overenie konzistencie** — po čistení by mal zostať len `GET`, `200/206/304`, `HTTP/1.1`.
+
+---
+
+## Celkový code flow
+
+```
+main()
+    │
+    ├─► parse_log_to_dataframe("wm2020projekt_oravec.log")
+    │       otvorí súbor s encoding="utf-8", errors="replace"
+    │       pre každý riadok:
+    │           LOG_LINE_REGEX.match(line.strip())
+    │           ak zhoda: records.append({ IP, Cookie, user, DateTime,
+    │                     RequestMethod, URL, RequestVersion, StatusCode,
+    │                     Bytes, Referrer, Agent })
+    │       pd.DataFrame(records)  →  df  (11 stĺpcov)
+    │
+    ├─► clean_data(df)
+    │       Krok 1: df.drop(["Cookie","user","Bytes"])       →  8 stĺpcov
+    │       Krok 2: isin([200,206,304])                      →  iba úspešné požiadavky
+    │       Krok 3: isin(["GET"])                            →  iba navigačné metódy
+    │       Krok 4: ~mask_static  (regex na prípony)         →  iba HTML stránky
+    │       Krok 5: ~mask_navbar  (pevný reťazec)            →  bez interného monitoringu
+    │       Krok 6: value_counts()  kontrolná štatistika
+    │
+    └─► df.to_csv("wm2020projekt_cleaned.csv", index=False, encoding="utf-8")
+```
+
+---
+
+## Prehľad najdôležitejších funkcií
+
+| Funkcia | Čo robí a prečo |
+|---|---|
+| `re.compile(pattern)` | Skompiluje regex **raz** — opakované `.match()` v cykle je oveľa rýchlejšie |
+| `regex.match(line)` | Zhoda od **začiatku** reťazca; vráti objekt alebo `None` |
+| `m.group(n)` | Obsah n-tej zachytenej skupiny `(...)` v regexe; `m.group(8)` = StatusCode |
+| `int(m.group(8))` | Prevedie reťazec `"200"` na číslo `200` — nutné pre `isin([200, 206, 304])` |
+| `pd.DataFrame(records)` | Vytvorí tabuľku zo zoznamu slovníkov — každý slovník = 1 riadok |
+| `df.drop(columns=[...], inplace=True)` | Vymaže stĺpce; `inplace=True` = mení df priamo bez kópie |
+| `df["col"].isin([...])` | Bool stĺpec: `True` kde hodnota je v zozname — ekvivalent `==` pre viacero hodnôt |
+| `df["col"].str.contains(pat, case=False, regex=True, na=False)` | Bool stĺpec: regex matching; `case=False` = veľké/malé písmená |
+| `~mask` | Negácia bool stĺpca — **zachová** riadky kde mask = `False` |
+| `df.reset_index(drop=True)` | Znovu čísluje riadky od 0 po filtrovaní — nutné pre správny `shift()` v Task 3 |
+| `value_counts()` | Spočíta unikátne hodnoty; zoradí zostupne |
+| `df.to_csv(file, index=False)` | Uloží DataFrame do CSV bez automatického číselného indexu |
+
+---
+
+## Kľúčové otázky na obhajobu
+
+**Prečo je potrebné `reset_index(drop=True)` po každom filtrovaní?**  
+Po `df[mask]` zostanú pôvodné indexy — napr. po vymazaní riadkov 0–99 začína zostatok od indexu 100. V Task 3 používame `groupby().shift()`, v Task 5 `iloc[]` — obe predpokladajú súvislé číslovanie od 0. Ak by indexy "skákali", výsledky by boli nesprávne.
+
+**Prečo `errors="replace"` pri otváraní logu?**  
+Apache log môže obsahovať neplatné UTF-8 bajty (napríklad v User-Agent reťazcoch starých prehliadačov alebo robotov). Bez `errors="replace"` by Python vyhodil `UnicodeDecodeError` a skript by spadol. `"replace"` nahradí neplatné bajty znakom `?` a pokračuje.
+
+**Čo je rozdiel medzi `bool` indexovaním `df[mask]` a `df.loc[mask]`?**  
+`df[mask]` a `df.loc[mask]` v prípade boolean masky robia to isté — oba vyberú riadky kde je maska `True`. `df.loc` je explicitnejší a preferovaný v komplexnejších prípadoch, `df[mask]` je kratší a idiomatický pre čisté boolean indexovanie.
+
+**Čo je Apache Combined Log Format a aké polia obsahuje?**  
+Rozšírenie Common Log Format o dva ďalšie polia. Každý riadok obsahuje: IP adresa – identita klienta (zvyčajne `-`) – meno používateľa (zvyčajne `-`) – čas požiadavku – HTTP požiadavok (metóda + URL + protokol) – stavový kód – veľkosť odpovede – Referrer – User-Agent. Pole v úvodzovkách môže obsahovať medzery — preto regex s skupinami, nie delenie podľa medzier.
+
+**Čo je regex skupina `(?P<name>...)` a na čo sa používa?**  
+`(?P<name>...)` je **pomenovaná zachytávajúca skupina** v regexe. Čokoľvek, čo zodpovedá vzoru `...`, sa uloží pod menom `name`. Príklad: `(?P<IP>\d+\.\d+\.\d+\.\d+)` zachytí IP adresu pod kľúčom `"IP"`. Pristúpime k nej cez `m.group("IP")`. Výhoda oproti číselným skupinám `(...)` = kód je čitateľnejší a nezávisí od poradia skupín.
+
+**Prečo `re.compile()` namiesto priameho `re.match(pattern, line)` v každej iterácii?**  
+`re.compile(pattern)` skompiluje regex vzor **raz** do vnútornej reprezentácie (konečného automatu). Ak by sme volali `re.match(pattern, line)` v cykle, Python by kompiloval vzor znova pri každom riadku — pre log so 100 000 riadkami to je 100 000 zbytočných kompilácií. `re.compile()` = inicializácia raz, volanie `compiled.match(line)` v cykle = výrazne rýchlejšie.
+
+**Aké HTTP stavové kódy sú v projekte povolené a čo každý znamená?**
+
+| Kód | Názov | Popis |
+|---|---|---|
+| 200 | OK | Požiadavok úspešný, obsah vrátený |
+| 206 | Partial Content | Čiastočný obsah (napr. veľký súbor, stiahnutie po častiach) |
+| 304 | Not Modified | Obsah nezmenený, prehliadač použije vlastnú cache |
+
+Kód 304 je dôležitý — znamená, že používateľ stránku **navštívil** (prehliadač spýtal server), len obsah prišiel z cache. Keby sme 304 vylúčili, stratili by sme legitímne navigačné záznamy.
+
+**Prečo vymazávame statické súbory (css, js, png, ...)?**  
+Každá HTML stránka automaticky stiahne desiatky statických súborov — obrázky, štýly, skripty. Tieto sú načítané prehliadačom **automaticky bez kliknutia používateľa**. Napríklad pri návšteve `/o-nas` sa automaticky stiahne `/static/style.css`, `/img/logo.png` atď. Keby sme ich nezmazali, každý klik by sa javil ako 20+ požiadavkov — analýza by bola úplne skreslená.
+
+**Čo je `(?:...)` a prečo sa líši od `(...)`?**  
+`(?:...)` je **nezachytávajúca skupina** — zoskupuje časti vzoru pre operátory `|` alebo `+`, ale výsledok **nezachytáva** do skupiny. Napr. `(?:css|js|png)` zhoduje s ktorýmkoľvek z troch slov, ale nevráti ich ako extra skupinu. Používame ho v `STATIC_FILE_PATTERN` pre efektívnosť — nepotrebujeme zachytávať prípony, len detekovať zhodu.
+
+**Čo by sa stalo, keby sme nezmazali `/navbar/navbar-ukf.html`?**  
+Táto URL je súčasť navigačného panelu — načítava sa automaticky pri každej stránke ako súčasť layoutu. Keby sme ju nezmazali, každý návštevník by mal v logu desiatky záznamov pre `/navbar/navbar-ukf.html` namiesto skutočných navigačných kliknutí. To by skreslilo frekvencie URL, sedenia aj analýzu správania.
+
+**Prečo filtrujeme metódu GET a nie POST?**  
+GET požiadavky sú **navigačné** — načítanie stránky kliknutím. POST požiadavky sú **akčné** — odoslanie formulára (prihlásenie, komentár). Analýza navigačného správania zaujíma len to, kde používateľ chodil, nie čo odosielal. POST záznamy by navyše neobsahovali URL stránky ale URL handlera formulára.
+
+**Ako by si overil, že čistenie prebehlo správne?**  
+Použijeme `df["URL"].value_counts()` — zobrazí top 20 najčastejších URL. Keby tam boli statické súbory (`.css`, `.js`), čistenie zlyhalo. Keby tam bola `/robots.txt`, Task 2 ešte nebehol. `df.shape` ukáže počet riadkov pred a po — môžeme skontrolovať, že sme neodstránili príliš veľa/málo.
