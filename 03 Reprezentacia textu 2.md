@@ -1,23 +1,97 @@
-
 # NLP – Lematizácia a reprezentácia textu dátovou maticou
 
 ---
 
 ## Čo skript robí (podrobne)
 
-Skript implementuje **NLP pipeline** (spracovanie prirodzeného jazyka), ktorý prevádza 5 surových textových súborov na číselné matice. Výstupom je Excel súbor s piatimi listami reprezentujúcimi rovnaké texty rôznymi štatistickými metódami.
+### Základný problém, ktorý skript rieši
+
+Počítač nedokáže pracovať priamo s textom – potrebuje čísla. Každý algoritmus strojového učenia, vyhľadávací systém alebo klasifikátor vyžaduje číselný vstup. Skript rieši tento problém: vezme 5 anglických textových dokumentov a prevedie ich na sústavu číselných matíc, kde každý dokument je reprezentovaný vektorom čísel.
+
+Výsledná reprezentácia sa nazýva **Bag of Words** (vak slov) – model, v ktorom nezáleží na poradí slov, iba na tom, ktoré slová sa v texte vyskytujú a ako často. Každý dokument sa stane jedným riadkom matice, každé unikátne slovo (léma) jedným stĺpcom.
+
+---
+
+### Prečo lematizácia a nie surové slová?
+
+Anglický text obsahuje morfologické variácie toho istého slova: `running`, `runs`, `ran` sú rôzne formy slovesa `run`. Ak by sme pracovali so surovými slovami, každá forma by zabrala vlastný stĺpec v matici, hoci všetky nesú rovnaký sémantický obsah. Lematizácia redukuje toto "rozptýlenie" – všetky formy sa mapujú na jednu lému `run`, čím sa zmenší rozsah slovníka a matica bude informatívnejšia.
+
+Podobne: `companies` → `company`, `algorithms` → `algorithm`, `glaciers` → `glacier`.
+
+---
 
 ### Vstup
 
 Päť textových súborov `text1.txt` – `text5.txt`, každý s anglickým odborným textom z inej oblasti:
 
-| Súbor | Téma |
-|---|---|
-| `text1.txt` | Umelá inteligencia a robotika |
-| `text2.txt` | Klimatické zmeny |
-| `text3.txt` | Ľudský mozog a neurológia |
-| `text4.txt` | Vesmírny výskum |
-| `text5.txt` | Globálna ekonomika |
+| Súbor | Téma | Príklady kľúčových slov |
+|---|---|---|
+| `text1.txt` | Umelá inteligencia a robotika | algorithm, network, robot, learn, train |
+| `text2.txt` | Klimatické zmeny | climate, glacier, carbon, temperature, energy |
+| `text3.txt` | Ľudský mozog a neurológia | brain, neuron, memory, sleep, therapy |
+| `text4.txt` | Vesmírny výskum | space, planet, rocket, galaxy, telescope |
+| `text5.txt` | Globálna ekonomika | inflation, bank, currency, trade, market |
+
+Texty sú zámerne z odlišných domén – slová ako `system`, `new`, `large` sa vyskytujú vo viacerých textoch (→ nízke IDF), zatiaľ čo `glacier`, `neuron`, `exoplanet` sú unikátne pre jeden text (→ vysoké IDF). Toto rozloženie dobre demonštruje, čo TF-IDF meria.
+
+Skript má zabudovanú zálohu: ak textové súbory chýbajú, automaticky ich vytvorí zo vstavených vzorových textov.
+
+---
+
+### NLP pipeline – čo sa deje s každým textom
+
+Pre každý z 5 dokumentov prebehne nasledujúca séria transformácií:
+
+```
+"Artificial intelligence is transforming the world..."
+          │
+          ▼  sent_tokenize()
+["Artificial intelligence is transforming the world.", "Machines are learning..."]
+          │
+          ▼  word_tokenize() na každú vetu
+["Artificial", "intelligence", "is", "transforming", "the", "world", ...]
+          │
+          ▼  .lower()
+["artificial", "intelligence", "is", "transforming", "the", "world", ...]
+          │
+          ▼  filter: not in stop_words, isalpha(), len > 2
+["artificial", "intelligence", "transforming", "world", ...]
+          │
+          ▼  lemmatizer.lemmatize()
+["artificial", "intelligence", "transform", "world", ...]
+```
+
+Stop slová sú funkčné slová anglického jazyka bez sémantického obsahu: `the`, `is`, `are`, `and`, `of`, `to`, `a`, `in`, `that`, `it` ... NLTK ich má predpripravený zoznam pre desiatky jazykov. Filtrovanie zabezpečí, že v matici skončia len plnovýznamové slová.
+
+---
+
+### Čo je slovník (vocabulary) a prečo je dôležitý
+
+Po lematizácii všetkých 5 dokumentov sa zozbierajú **všetky unikátne lémy** naprieč celou kolekciou. Tento zoznam tvorí **slovník** – množinu stĺpcov, ktorá je spoločná pre všetky matice.
+
+Príklad (zjednodušene): ak `text1.txt` dá lémy `{algorithm, network, train}` a `text2.txt` dá `{climate, energy, train}`, slovník bude `{algorithm, climate, energy, network, train}`. Léma `train` je v oboch dokumentoch, ostatné len v jednom.
+
+Dôležité: slovník je **fixný** – rovnaké stĺpce pre všetky matice. Dokument, v ktorom sa léma nevyskytuje, dostane v príslušnom stĺpci hodnotu 0.
+
+---
+
+### Štyri rôzne pohľady na tie isté dáta
+
+Z jedného zdrojového TF (frekvenčného) počítadla skript odvodí štyri rôzne numerické reprezentácie, každá s iným zámerom:
+
+**1. TF – absolútna frekvencia**
+Surový počet výskytov. Základ všetkého, ale nevie povedať, či je slovo dôležité – len to, či je časté.
+
+**2. Binárna matica**
+Zahodí frekvenciu, zachová len prítomnosť. Užitočná keď záleží iba na tom, či slovo v texte je alebo nie je (napr. spam filter: buď obsahuje slovo "výhra" alebo nie).
+
+**3. Logaritmická matica**
+Kompromis: zachová informáciu o frekvencii, ale "skrotí" extrémne hodnoty. Slovo s výskytom 1× vs. 100× nie je v logaritmickej škále 100× dôležitejšie, ale len ~6.6×. Tlmí dominanciu slov, ktoré sa opakujú veľa-krát (napr. slovo `said` v rozhovorovom texte).
+
+**4. TF-IDF matica**
+Najsofistikovanejšia. Prináša nový rozmer: nielen ako často sa slovo vyskytuje *v tomto dokumente*, ale aj ako vzácne je *naprieč celou kolekciou*. Slovo, ktoré je časté len v jednom dokumente a zriedkavé vo zvyšných, dostane vysoké skóre – je charakteristické pre daný dokument.
+
+---
 
 ### Čo skript počíta
 
@@ -27,31 +101,39 @@ Z týchto textov skript odvodí **štyri typy matíc** a jeden pomocný vektor:
 2. **Binárna matica** – iba 0 alebo 1 (vyskytuje sa / nevyskytuje sa)
 3. **Logaritmická matica** – `log10(1 + TF)`, tlmí vplyv veľmi frekventovaných slov
 4. **TF-IDF matica** – TF × IDF, zvýrazňuje slová typické pre konkrétny dokument
-5. **IDF vektor** – inverzná dokumentová frekvencia pre každú lému
+5. **IDF vektor** – inverzná dokumentová frekvencia pre každú lému (nie matica, len 1 riadok hodnôt)
+
+---
 
 ### Výstup
 
-| Súbor | Typ | Obsah |
-|---|---|---|
-| `lemma_matrices.xlsx` (list `TF_frekvencia`) | Výstup | Absolútne frekvencie lém |
-| `lemma_matrices.xlsx` (list `Binarna`) | Výstup | 0 / 1 prítomnosť lémy |
-| `lemma_matrices.xlsx` (list `Logaritmicka`) | Výstup | log10(1 + TF) |
-| `lemma_matrices.xlsx` (list `TF-IDF`) | Výstup | TF × IDF |
-| `lemma_matrices.xlsx` (list `IDF`) | Výstup | IDF hodnota pre každú lému |
+Všetky výsledky sú zapísané do jedného Excel súboru `lemma_matrices.xlsx` s piatimi listami:
 
-### Štruktúra výstupnej matice
+| List | Obsah | Rozsah hodnôt |
+|---|---|---|
+| `TF_frekvencia` | Absolútne frekvencie lém | 0, 1, 2, 3, ... |
+| `Binarna` | 0 / 1 prítomnosť lémy | {0, 1} |
+| `Logaritmicka` | log10(1 + TF) | 0, 1.0, 1.301, 1.477, ... |
+| `TF-IDF` | TF × IDF | 0.0 – typicky do ~5.0 |
+| `IDF` | IDF hodnota pre každú lému (1 stĺpec = 1 léma) | 0 – log10(5) ≈ 0.699 |
+
+### Štruktúra výstupnej matice (príklad z listu TF-IDF)
 
 ```
-              algorithm  artificial  ...  year
-text1.txt          2          3     ...    1
-text2.txt          0          0     ...    2
-text3.txt          0          0     ...    0
-...
+              algorithm  artificial  climate  glacier  ...  year
+text1.txt        1.398       2.097    0.000    0.000  ...   0.0
+text2.txt        0.000       0.000    0.699    1.398  ...   0.0
+text3.txt        0.000       0.000    0.000    0.000  ...   0.0
+text4.txt        0.000       0.000    0.000    0.000  ...   0.0
+text5.txt        0.000       0.000    0.000    0.000  ...  0.699
 ```
 
 - **Riadky** = dokumenty (`text1.txt` – `text5.txt`)
-- **Stĺpce** = unikátne lémy (základné tvary slov) naprieč všetkými dokumentmi
-- **Hodnota bunky** = závisí od reprezentácie (TF, 0/1, log-váha, TF-IDF váha)
+- **Stĺpce** = unikátne lémy (základné tvary slov) naprieč všetkými dokumentmi – typicky 150–250 stĺpcov
+- **Hodnota bunky** = závisí od listu (TF, 0/1, log-váha, TF-IDF váha)
+- **Nulové hodnoty** = léma sa v danom dokumente nevyskytuje (alebo má IDF = 0 pretože je vo všetkých dok.)
+
+Vysoké TF-IDF hodnoty (`algorithm` v `text1.txt`, `glacier` v `text2.txt`) identifikujú kľúčové slová každého dokumentu – slová, ktoré ho najlepšie charakterizujú voči ostatným.
 
 ---
 
