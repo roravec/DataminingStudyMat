@@ -166,7 +166,7 @@ $$
 ### 2. Logaritmická TF (Term Frequency)
 
 $$
-\text{log\_TF}(d, t) =
+\text{log}_{\text{TF}}(d, t) =
 \begin{cases}
 1 + \log_{10}(wf(d,t)) & \text{ak } wf(d,t) > 0 \\
 0 & \text{inak}
@@ -175,7 +175,7 @@ $$
 
 kde $wf(d, t)$ = surová frekvencia termu $t$ v dokumente $d$.
 
-**Prečo +1:** Aby platilo $\text{log\_TF}(d,t) > 0$ pre každé slovo, ktoré sa vyskytuje. Bez +1 by $\log_{10}(1) = 0$, čo by zrovnalo slovo s výskytom 1 a slovo s výskytom 0.
+**Prečo +1:** Aby platilo $\text{log}_{\text{TF}}(d,t) > 0$ pre každé slovo, ktoré sa vyskytuje. Bez +1 by $\log_{10}(1) = 0$, čo by zrovnalo slovo s výskytom 1 a slovo s výskytom 0.
 
 **Prečo logaritmus:** Surová frekvencia môže byť veľmi veľká. Logaritmus „skrotí" rozsah hodnôt – slovo, ktoré sa vyskytuje 100×, je len **2×** dôležitejšie ako slovo s výskytom 10× (nie 10×).
 
@@ -207,7 +207,7 @@ kde:
 $$
 \text{TF-IDF}(d, t) =
 \begin{cases}
-\text{log\_TF}(d,t) \times \text{IDF}(t) & \text{ak } wf(d,t) > 0 \\
+\text{log}_{\text{TF}}(d,t) \times \text{IDF}(t) & \text{ak } wf(d,t) > 0 \\
 0 & \text{inak}
 \end{cases}
 $$
