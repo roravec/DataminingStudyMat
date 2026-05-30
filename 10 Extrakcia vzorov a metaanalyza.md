@@ -91,6 +91,26 @@ START
 
 ---
 
+## Spustenie skriptu
+
+```
+python logs5_analysis.py [--input logs5.csv] [--output-dir analysis_outputs]
+                         [--top-k 10] [--min-count 5]
+```
+
+| Parameter | Predvolená hodnota | Popis |
+|---|---|---|
+| `--input` | `logs5.csv` | Cesta k vstupnému CSV |
+| `--output-dir` | `analysis_outputs` | Priečinok pre výstupy |
+| `--top-k` | `10` | Max počet pravidiel na kvartál (top pravidlá podľa support) |
+| `--min-count` | `5` | Min počet relácií pre sekvenčné pravidlo (absolútny count, nie zlomok) |
+
+Rozdiel medzi `min_count` a `min_support`:
+- `min_support` = relatívny prah (0.05 = 5 % relácií) – používa sa v Apriori
+- `min_count` = absolútny počet relácií (5 relácií) – používa sa v sekvenčnej analýze; prepočet: `support = min_count / n_sessions`
+
+---
+
 ## Postup riešenia krok za krokom
 
 ### Krok 1 – Načítanie a čistenie dát (`load_dataframe`)
@@ -687,6 +707,121 @@ A: `errors="coerce"` pri `pd.to_numeric` nahrádza nečíselné hodnoty za `NaN`
 **Q: Prečo sa používa `set()` pri počítaní `seen_rules` v sekvenčnej analýze?**
 
 A: Aby sme v každej relácii počítali každý prechod $A \to B$ **najviac raz**. Bez toho by dlhá relácia s mnohými opakovaním stránky A a B umelé zvyšovala count pravidla, čo by skresľovalo support na úrovni relácií.
+
+---
+
+**Q: Čo je `frozenset` a prečo ho používa mlxtend?**
+
+A: `frozenset` je nemeniteľná (immutable) množina v Pythone. mlxtend uchováva antecedenty a konsekvent každého pravidla ako `frozenset`, pretože množina `{A, B}` musí byť hashable – aby mohla byť kľúčom v slovníku a mohla sa porovnávať nezávisle od poradia. Funkcia `format_apriori_rules` konvertuje `frozenset` na čitateľný text: `", ".join(sorted(...))`.
+
+---
+
+**Q: Čo sa stane, ak ani pri `min_support = 0.01` nenájdeme 10 pravidiel?**
+
+A: Skript vráti pravidlá, ktoré sa pri `0.01` našli (aj keď ich je menej ako 10) a pokračuje ďalej. V praxi sa to stalo pre kvartály 12Q3 a 12Q4 (category) – tam sú 0 asociačných pravidiel, čo samo osebe je zaujímavý výsledok: správanie návštevníkov bolo v tomto období buď veľmi homogénne alebo veľmi rôznorodé.
+
+---
+
+**Q: Čo znamená `axis=0` a `axis=1` v kontexte tohto skriptu?**
+
+A:
+```
+Binárna matica (vzory × kvartály):
+
+             09Q1  09Q2  09Q3  ...  12Q4
+Vzor A         1     1     0  ...     0
+Vzor B         0     1     1  ...     1
+Vzor C         1     1     1  ...     1
+
+.sum(axis=0) → sumuj po stĺpcoch (cez vzory)
+              → [2, 3, 2, ..., 2]  = koľko vzorov v každom kvartáli
+
+.sum(axis=1) → sumuj po riadkoch (cez kvartály)
+              → [2, 3, 3]  = v koľkých kvartáloch je každý vzor
+```
+
+V `cochran_q_test`: `col_sums = x.sum(axis=0)` = $C_j$ (stĺpcové súčty), `row_sums = x.sum(axis=1)` = $R_i$ (riadkové súčty).
+
+---
+
+**Q: Čo je `groupby` a ako funguje v tomto skripte?**
+
+A: `df.groupby(frame_col)` rozdelí DataFrame na skupiny podľa ID relácie. Pre každú skupinu (reláciu) dostaneme pod-DataFrame so všetkými kliknutiami tejto relácie. Je to ekvivalent SQL `GROUP BY frame`. V skripte sa používa dvakrát: raz na zostavenie transakcií (množiny stránok) a raz na zostavenie sekvencií (zoradené polia stránok).
+
+---
+
+**Q: Prečo `format_apriori_rules` triedi pravidlá podľa `support DESC, confidence DESC, lift DESC`?**
+
+A: Chceme na výstupe vidieť **najrelevantnejšie** pravidlá. Primárne triedenie podľa support zaručí, že pravidlá platné pre veľkú časť relácií sú hore. Sekundárne podľa confidence = pravidlá s vysokou presnosťou. Terciárne podľa lift = pravidlá s najsilnejšou asociáciou. Funkcia `.head(top_k)` potom vezme len prvých 10.
+
+---
+
+**Q: Čo je Friedmanov test a ako súvisí s Cochran Q?**
+
+A: Friedmanov test je neparametrický ekvivalent repeated-measures ANOVA pre ordinálne (poradové) dáta. Cochran Q test je jeho špeciálny prípad pre **binárne** dáta (0/1). Oba testujú, či sa závislé skupiny (kvartály) štatisticky líšia. Cochran Q predpokladá: binárne merania, závislé vzorky (rovnaký vzor meraný vo všetkých kvartáloch), náhodný výber.
+
+---
+
+**Q: Čo je `chi2` distribúcia a prečo ju používame tu?**
+
+A: Chi-kvadrát distribúcia $\chi^2(df)$ je distribúcia súčtu štvorcov $df$ nezávislých štandardných normálnych náhodných premenných. Cochran Q štatistika **asymptoticky** sleduje $\chi^2(k-1)$ distribúciu pre veľké vzorky. U nás $k-1 = 15$ stupňov voľnosti. Čím väčšie $Q$, tým ďalej sme v chvoste distribúcie → menšia p-hodnota → silnejší dôkaz proti $H_0$.
+
+---
+
+**Q: Aká je interpretácia pravidla `Pricing List => Pricing List` v sekvenčnej analýze?**
+
+A: Toto nie je chyba – znamená to, že v rámci jednej relácie používateľ navštívil stránku `Pricing List` **viackrát** po sebe (alebo sa k nej vrátil). Je to legitímna sekvencia: stránka $A$ → tá istá stránka $A$. Support = 0.512 v 09Q1 hovorí, že viac ako polovica relácií obsahujúcich `Pricing List` ju navštívila viackrát. Používatelia si cenník prezerali opakovane – pravdepodobne porovnávali produkty.
+
+---
+
+---
+
+## Doménový kontext – čo znamenajú kategórie
+
+Logy pochádzajú z webu **banky** počas finančnej krízy. Kategórie stránok odhaľujú, čo návštevníci hľadali:
+
+| Kategória / webPart | Pravdepodobný obsah |
+|---|---|
+| `Pillar3 related` | Regulačné zverejnenia podľa Basel III – Pillar 3 (povinné reporty o riziku) |
+| `Pillar3 disclosure requirements` | Špecifické požiadavky na zverejnenie podľa regulácie |
+| `Pillar3 Q-terly Info` | Kvartálne regulačné informácie |
+| `Reputation` | Sekcia o reputácii / imidži banky |
+| `We support..` | CSR sekcia (Corporate Social Responsibility) |
+| `Pricing List` | Cenník produktov banky |
+| `Awards` | Ocenenia a certifikáty |
+| `Rating` | Kreditný rating banky |
+| `History` | História banky |
+
+**Prečo dominuje Pillar3?** Počas finančnej krízy (2008–2010) regulátori výrazne sprísnili požiadavky na transparentnosť bánk. Investori a analytici intenzívne sledovali regulačné zverejnenia – odtiaľ vysoká stabilita `Pillar3` vzorcov naprieč všetkými 16 kvartálmi.
+
+---
+
+## Interpretácia výstupných grafov
+
+### `assoc_cat_binary_heatmap.png` (a obdobné pre web/seq)
+
+```
+Tmavá bunka = vzor prítomný v tomto kvartáli
+Svetlá bunka = vzor neprítomný
+Červená čiara = hranica krízové/post-krízové obdobie
+Riadky zoradené: najstabilnejšie vzory sú hore
+```
+
+Ak vidíme tmavé bunky **len vľavo** od červenej čiary → vzor sa vyskytoval len počas krízy.
+Ak sú tmavé bunky **všade** → vzor je stabilný (napr. sekvenčné pravidlá).
+Ak sú tmavé bunky **len vpravo** → vzor sa objavil až po kríze.
+
+### `rule_counts_per_period.png`
+
+Zobrazuje, koľko pravidiel sa podarilo nájsť v každom kvartáli pre každý typ analýzy.
+- Pokles v 2012 pre `assoc_cat` a `assoc_web` (12Q3, 12Q4 = 0–2 pravidlá) = indikátor zmeny správania
+- Sekvenčné pravidlá zostávajú konštantné = stabilná navigácia
+
+### `assoc_cat_recurrence.png` (histogram)
+
+Os X = koľko kvartálov obsahuje daný vzor (1 až 16).
+Os Y = počet vzorov s danou hodnotou.
+Vzory s hodnotou 16 = "evergreen" pravidlá – prítomné vždy.
 
 ---
 
