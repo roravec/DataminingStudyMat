@@ -365,17 +365,21 @@ Pre každú reláciu (zoradenú podľa unixTime):
         action_count[A]   += 1   (ak ešte nebol v tejto relácii)
 ```
 
-Potom:
+Zavedieme skrátené značky (zodpovedajú premenným v kóde):
+- $c_{AB}$ = počet relácií kde prechod $A \to B$ nastáva
+- $c_A$ = počet relácií kde sa vyskytuje $A$
+- $c_B$ = počet relácií kde sa vyskytuje $B$
+
 $$
-\text{support}(A \to B) = \frac{\text{rule\_count}[A, B]}{|T|}
+\text{support}(A \to B) = \frac{c_{AB}}{|T|}
 $$
 
 $$
-\text{confidence}(A \to B) = \frac{\text{rule\_count}[A, B]}{\text{action\_count}[A]}
+\text{confidence}(A \to B) = \frac{c_{AB}}{c_A}
 $$
 
 $$
-\text{lift}(A \to B) = \frac{\text{confidence}(A \to B)}{\text{action\_count}[B] / |T|}
+\text{lift}(A \to B) = \frac{\text{confidence}(A \to B)}{c_B / |T|}
 $$
 
 **Príklad zo skutočných dát (09Q1, category):**
@@ -511,7 +515,7 @@ W            = 12.0 * S / (n ** 2 * (m ** 3 - m))
 
 **Skutočné výsledky:**
 
-| Typ analýzy | W | n\_items | n\_raters | Interpretácia |
+| Typ analýzy | W | `n_items` | `n_raters` | Interpretácia |
 |---|---|---|---|---|
 | `ASSOC_CAT` | 0.2929 | 18 | 16 | Slabá zhoda – asociačné vzory sa v čase menia |
 | `ASSOC_WEB` | 0.1388 | 28 | 16 | Veľmi slabá zhoda |
@@ -693,4 +697,3 @@ Skript ukázal, že:
 1. **Asociačné vzory sa medzi krízou a post-krízou štatisticky menili** (Cochran Q p < 0.05) – ľudia menili, ktoré stránky prehliadali spolu (napr. v neskorej kríze a post-kríze menej asociácií pre webPart, len 0–2 pravidlá v 12Q3/12Q4)
 2. **Sekvenčné vzory boli veľmi stabilné** (Cochran Q = 0, Kendallovo W ≈ 0.51–0.69) – spôsob navigácie (poradie kliknutí) sa nezmenil napriek kríze
 3. **Najstabilnejšie vzory** naznačujú, že stránky súvisiace s `Pillar3` (regulačné požiadavky bánk) a `Pricing List` boli navštevované konzistentne po celých 4 rokoch
-
