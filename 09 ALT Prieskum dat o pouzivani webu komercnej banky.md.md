@@ -1,664 +1,763 @@
-# NLP – Lematizácia a reprezentácia textu dátovou maticou
+# Prieskum dat o pouzivani webu banky
 
 ---
 
-## Čo skript robí (podrobne)
+## Co skript robi (podrobne)
 
-### Základný problém, ktorý skript rieši
+### Zakladny problem, ktory skript riesi
 
-Počítač nedokáže pracovať priamo s textom – potrebuje čísla. Každý algoritmus strojového učenia, vyhľadávací systém alebo klasifikátor vyžaduje číselný vstup. Skript rieši tento problém: vezme 5 anglických textových dokumentov a prevedie ich na sústavu číselných matíc, kde každý dokument je reprezentovaný vektorom čísel.
+Subor logs5.csv obsahuje 2 071 235 zaznamov navstev webu banky. Kazdy riadok je jedna navsteva, ale samotne riadky neodpovedaju na analyzne otazky.
 
-Výsledná reprezentácia sa nazýva **Bag of Words** (vak slov) – model, v ktorom nezáleží na poradí slov, iba na tom, ktoré slová sa v texte vyskytujú a ako často. Každý dokument sa stane jedným riadkom matice, každé unikátne slovo (léma) jedným stĺpcom.
+Skript analyze.py tento problem riesi tak, ze surove logy transformuje na:
+
+1. vycistene analyzne data,
+2. agregovane tabulky,
+3. statisticke testy vztahov,
+4. textovy report,
+5. graficke vystupy.
+
+Prakticky: zo surovych pristupov robi obhajitelny analyzny vystup.
 
 ---
 
-### Prečo lematizácia a nie surové slová?
+### Preco cistenie a agregacia, a nie priama analyza surovych riadkov
 
-Anglický text obsahuje morfologické variácie toho istého slova: `running`, `runs`, `ran` sú rôzne formy slovesa `run`. Ak by sme pracovali so surovými slovami, každá forma by zabrala vlastný stĺpec v matici, hoci všetky nesú rovnaký sémantický obsah. Lematizácia redukuje toto "rozptýlenie" – všetky formy sa mapujú na jednu lému `run`, čím sa zmenší rozsah slovníka a matica bude informatívnejšia.
+Surove logy maju nejednotne textove hodnoty (prazdne, -, NaN), mozne nevalidne cisla a casovu znamku, ktoru treba rozlozit na analyzne pouzitelne casove premenne.
 
-Podobne: `companies` → `company`, `algorithms` → `algorithm`, `glaciers` → `glacier`.
+Bez cistenia by:
+
+- vznikali falosne pseudo-kategorie,
+- testy padali na nevalidnych hodnotach,
+- porovnanie trendov v case nebolo stabilne.
+
+Agregacia (groupby, crosstab, weekly visits) je nevyhnutna, lebo testy Spearman/Chi-square/Kruskal nebezia nad lubovolnym surovym textom, ale nad pripravenymi strukturami.
 
 ---
 
 ### Vstup
 
-Päť textových súborov `text1.txt` – `text5.txt`, každý s anglickým odborným textom z inej oblasti:
+Vstupom je subor logs5.csv so separatorom ;.
 
-| Súbor | Téma | Príklady kľúčových slov |
+Pouzite premenne:
+
+| Premenna | Skupina | Ucel |
 |---|---|---|
-| `text1.txt` | Umelá inteligencia a robotika | algorithm, network, robot, learn, train |
-| `text2.txt` | Klimatické zmeny | climate, glacier, carbon, temperature, energy |
-| `text3.txt` | Ľudský mozog a neurológia | brain, neuron, memory, sleep, therapy |
-| `text4.txt` | Vesmírny výskum | space, planet, rocket, galaxy, telescope |
-| `text5.txt` | Globálna ekonomika | inflation, bank, currency, trade, market |
-
-Texty sú zámerne z odlišných domén – slová ako `system`, `new`, `large` sa vyskytujú vo viacerých textoch (→ nízke IDF), zatiaľ čo `glacier`, `neuron`, `exoplanet` sú unikátne pre jeden text (→ vysoké IDF). Toto rozloženie dobre demonštruje, čo TF-IDF meria.
-
-Skript má zabudovanú zálohu: ak textové súbory chýbajú, automaticky ich vytvorí zo vstavených vzorových textov.
+| category, webPart, urlExt | DV (obsah) | analyza navstiveneho obsahu |
+| year, quartal, yearQuartal, week, hour, dayofweek, crisis | IV (cas/obdobie) | analyza vyvoja a zavislosti |
+| length | behavior | dlzka navstevy |
+| internal | kontext | interny vs externy pristup |
+| anonIP | identifikator | unikatni navstevnici |
+| unixTime | technicka casova znamka | zdroj pre hour/dayofweek |
 
 ---
 
-### NLP pipeline – čo sa deje s každým textom
+### Datova pipeline - co sa deje s kazdym zaznamom
 
-Pre každý z 5 dokumentov prebehne nasledujúca séria transformácií:
-
-```
-"Artificial intelligence is transforming the world..."
-          │
-          ▼  sent_tokenize()
-["Artificial intelligence is transforming the world.", "Machines are learning..."]
-          │
-          ▼  word_tokenize() na každú vetu
-["Artificial", "intelligence", "is", "transforming", "the", "world", ...]
-          │
-          ▼  .lower()
-["artificial", "intelligence", "is", "transforming", "the", "world", ...]
-          │
-          ▼  filter: not in stop_words, isalpha(), len > 2
-["artificial", "intelligence", "transforming", "world", ...]
-          │
-          ▼  lemmatizer.lemmatize()
-["artificial", "intelligence", "transform", "world", ...]
-```
-
-Stop slová sú funkčné slová anglického jazyka bez sémantického obsahu: `the`, `is`, `are`, `and`, `of`, `to`, `a`, `in`, `that`, `it` ... NLTK ich má predpripravený zoznam pre desiatky jazykov. Filtrovanie zabezpečí, že v matici skončia len plnovýznamové slová.
-
----
-
-### Čo je slovník (vocabulary) a prečo je dôležitý
-
-Po lematizácii všetkých 5 dokumentov sa zozbierajú **všetky unikátne lémy** naprieč celou kolekciou. Tento zoznam tvorí **slovník** – množinu stĺpcov, ktorá je spoločná pre všetky matice.
-
-Príklad (zjednodušene): ak `text1.txt` dá lémy `{algorithm, network, train}` a `text2.txt` dá `{climate, energy, train}`, slovník bude `{algorithm, climate, energy, network, train}`. Léma `train` je v oboch dokumentoch, ostatné len v jednom.
-
-Dôležité: slovník je **fixný** – rovnaké stĺpce pre všetky matice. Dokument, v ktorom sa léma nevyskytuje, dostane v príslušnom stĺpci hodnotu 0.
-
----
-
-### Štyri rôzne pohľady na tie isté dáta
-
-Z jedného zdrojového TF (frekvenčného) počítadla skript odvodí štyri rôzne numerické reprezentácie, každá s iným zámerom:
-
-**1. TF – absolútna frekvencia**
-Surový počet výskytov. Základ všetkého, ale nevie povedať, či je slovo dôležité – len to, či je časté.
-
-**2. Binárna matica**
-Zahodí frekvenciu, zachová len prítomnosť. Užitočná keď záleží iba na tom, či slovo v texte je alebo nie je (napr. spam filter: buď obsahuje slovo "výhra" alebo nie).
-
-**3. Logaritmická matica**
-Kompromis: zachová informáciu o frekvencii, ale "skrotí" extrémne hodnoty. Slovo s výskytom 1× vs. 100× nie je v logaritmickej škále 100× dôležitejšie, ale len ~6.6×. Tlmí dominanciu slov, ktoré sa opakujú veľa-krát (napr. slovo `said` v rozhovorovom texte).
-
-**4. TF-IDF matica**
-Najsofistikovanejšia. Prináša nový rozmer: nielen ako často sa slovo vyskytuje *v tomto dokumente*, ale aj ako vzácne je *naprieč celou kolekciou*. Slovo, ktoré je časté len v jednom dokumente a zriedkavé vo zvyšných, dostane vysoké skóre – je charakteristické pre daný dokument.
-
----
-
-### Čo skript počíta
-
-Z týchto textov skript odvodí **štyri typy matíc** a jeden pomocný vektor:
-
-1. **TF – frekvenčná matica** – absolútny počet výskytov každej lémy v každom dokumente
-2. **Binárna matica** – iba 0 alebo 1 (vyskytuje sa / nevyskytuje sa)
-3. **Logaritmická matica** – `log10(1 + TF)`, tlmí vplyv veľmi frekventovaných slov
-4. **TF-IDF matica** – TF × IDF, zvýrazňuje slová typické pre konkrétny dokument
-5. **IDF vektor** – inverzná dokumentová frekvencia pre každú lému (nie matica, len 1 riadok hodnôt)
-
----
-
-### Výstup
-
-Všetky výsledky sú zapísané do jedného Excel súboru `lemma_matrices.xlsx` s piatimi listami:
-
-| List | Obsah | Rozsah hodnôt |
-|---|---|---|
-| `TF_frekvencia` | Absolútne frekvencie lém | 0, 1, 2, 3, ... |
-| `Binarna` | 0 / 1 prítomnosť lémy | {0, 1} |
-| `Logaritmicka` | log10(1 + TF) | 0, 1.0, 1.301, 1.477, ... |
-| `TF-IDF` | TF × IDF | 0.0 – typicky do ~5.0 |
-| `IDF` | IDF hodnota pre každú lému (1 stĺpec = 1 léma) | 0 – log10(5) ≈ 0.699 |
-
-### Štruktúra výstupnej matice (príklad z listu TF-IDF)
-
-```
-              algorithm  artificial  climate  glacier  ...  year
-text1.txt        1.398       2.097    0.000    0.000  ...   0.0
-text2.txt        0.000       0.000    0.699    1.398  ...   0.0
-text3.txt        0.000       0.000    0.000    0.000  ...   0.0
-text4.txt        0.000       0.000    0.000    0.000  ...   0.0
-text5.txt        0.000       0.000    0.000    0.000  ...  0.699
-```
-
-- **Riadky** = dokumenty (`text1.txt` – `text5.txt`)
-- **Stĺpce** = unikátne lémy (základné tvary slov) naprieč všetkými dokumentmi – typicky 150–250 stĺpcov
-- **Hodnota bunky** = závisí od listu (TF, 0/1, log-váha, TF-IDF váha)
-- **Nulové hodnoty** = léma sa v danom dokumente nevyskytuje (alebo má IDF = 0 pretože je vo všetkých dok.)
-
-Vysoké TF-IDF hodnoty (`algorithm` v `text1.txt`, `glacier` v `text2.txt`) identifikujú kľúčové slová každého dokumentu – slová, ktoré ho najlepšie charakterizujú voči ostatným.
-
----
-
-## Vstupné a výstupné súbory
-
-```
-text1.txt   ─┐
-text2.txt    │
-text3.txt    ├──► lemmatization.py ──► lemma_matrices.xlsx
-text4.txt    │
-text5.txt   ─┘
+```text
+logs5.csv
+   |
+   +--> read_csv(usecols)
+   |
+   +--> normalizacia textu
+   |      +--> prazdne/-/NaN -> UNKNOWN
+   |
+   +--> konverzia numeriky
+   |      +--> nevalidne hodnoty -> NaN
+   |
+   +--> derivacia casu z unixTime
+   |      +--> hour, dayofweek
+   |
+   +--> agregacie pre testy
+   |      +--> weekly visits
+   |      +--> crisis x category
+   |      +--> groups length by category
+   |
+   +--> statisticke testy
+   |      +--> Spearman
+   |      +--> Chi-square + Cramer V
+   |      +--> Kruskal-Wallis
+   |
+   +--> report + grafy
 ```
 
 ---
 
-## Postup riešenia – krok za krokom
+### Co je agregacia a preco je dolezita
 
-### 1. Importy a stiahnutie NLTK dát
+Agregacia znamena, ze viac surovych riadkov spojime do zmysluplnej sumarnej formy.
+
+Priklady v analyze.py:
+
+- groupby(year, week).size() -> navstevnost po tyzdnoch
+- crosstab(crisis, category) -> kontingencna tabulka pre Chi-square
+- groupby(category) nad length -> skupiny pre Kruskal-Wallis
+
+Bez tychto agregacii by nebolo mozne spravne interpretovat vztahy medzi premennymi.
+
+---
+
+### Tri rozne analyzne pohlady na tie iste data
+
+Skript sa na data pozera troma sposobmi:
+
+1. Trendovy pohlad: navstevnost v case (Spearman po rokoch)
+2. Strukturalny pohlad: zmena zlozenia obsahu podla obdobia crisis (Chi-square + Cramer V)
+3. Behavioralny pohlad: rozdiely dlzky navstevy medzi kategoriami (Kruskal-Wallis)
+
+Kazdy pohlad odpoveda na inu analyticku otazku, ale spolu tvoria konzistentny prieskum.
+
+---
+
+### Co skript pocita
+
+1. Pocet zaznamov a pocet unikatnych anonIP
+2. Top category, top webPart, top urlExt
+3. Spearmanovu korelaciu pre kazdy rok
+4. Chi-square test pre crisis x category
+5. Cramer V ako silu zavislosti
+6. Kruskal-Wallis pre length medzi category
+7. Vizualizacie navstevnosti a struktury
+
+---
+
+### Vystup
+
+Vsetky vystupy sa ukladaju do analysis_output_simple.
+
+| Subor | Obsah |
+|---|---|
+| report.txt | textovy sumar analyzy a testov |
+| visits_by_yearquartal.png | vyvoj navstevnosti po yearQuartal |
+| heatmap_day_hour.png | intenzita navstev podla hodina x den |
+| heatmap_week_year.png | intenzita navstev podla tyzden x rok |
+| top_category.png | najnavstevovanejsie kategorie |
+
+### Struktura vystupneho reportu (priklad)
+
+```text
+1) PREMENNE V ANALYZE
+2) ZAKLADNY PROFIL DAT
+3) TOP OBSAH
+4) SPEARMAN
+5) CHI-SQUARE + CRAMER V
+6) KRUSKAL-WALLIS
+7) POZNAMKA K ZADANIU
+```
+
+---
+
+## Vstupne a vystupne subory
+
+```text
+logs5.csv
+   |
+   +--> analyze.py
+          |
+          +--> analysis_output_simple/report.txt
+          +--> analysis_output_simple/visits_by_yearquartal.png
+          +--> analysis_output_simple/heatmap_day_hour.png
+          +--> analysis_output_simple/heatmap_week_year.png
+          +--> analysis_output_simple/top_category.png
+```
+
+---
+
+## Postup riesenia - krok za krokom
+
+### 1. Importy a fallback mechanizmus
 
 ```python
-import os, math
-import nltk
-import pandas as pd
 import numpy as np
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize, sent_tokenize
-from nltk.stem import WordNetLemmatizer
+import pandas as pd
 
-nltk.download('punkt_tab')
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
-nltk.download('stopwords')
-nltk.download('wordnet')
+try:
+    import matplotlib.pyplot as plt
+    PLOT_AVAILABLE = True
+except Exception:
+    PLOT_AVAILABLE = False
+
+try:
+    from scipy import stats as scipy_stats
+    SCIPY_AVAILABLE = True
+except Exception:
+    SCIPY_AVAILABLE = False
 ```
 
-| Knižnica / modul | Účel |
+| Modul | Ucel |
 |---|---|
-| `os`, `math` | Práca so súbormi, matematika (log10) |
-| `nltk` | Natural Language Toolkit – NLP nástroje |
-| `pandas` | Práca s DataFrame (tabuľková matica) |
-| `numpy` | Vektorizované matematické operácie |
-| `stopwords` | Zoznamy stop slov (the, is, and...) |
-| `word_tokenize`, `sent_tokenize` | Rozdelenie textu na slová / vety |
-| `WordNetLemmatizer` | Lematizátor – prevod na základný tvar |
+| pandas | cistenie, agregacia, tabulky |
+| numpy | ciselne operacie |
+| scipy.stats | statisticke testy |
+| matplotlib | grafy |
 
-NLTK pri prvom spustení stiahne potrebné jazykové modely: tokenizačné pravidlá (`punkt`), databázu anglických slov (`wordnet`) a zoznam stop slov.
+Fallback znamena, ze pri chybe kniznice skript neskonci okamzite, ale bezne casti vykona dalej.
 
 ---
 
-### 2. Inicializácia
+### 2. Inicializacia argumentov
 
 ```python
-stop_words = set(stopwords.words('english'))
-lemmatizer = WordNetLemmatizer()
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+parser.add_argument("--input", default=Path("logs5.csv"), type=Path)
+parser.add_argument("--outdir", default=Path("analysis_output_simple"), type=Path)
 ```
 
-- `set(...)` – stop slová uložíme do **množiny (set)**, lebo vyhľadávanie v sete je O(1) – každé slovo pri filtrovaní sa porovnáva v konštantnom čase, nie lineárne
-- `WordNetLemmatizer()` – vytvoríme jeden objekt lematizátora, ktorý sa použije opakovane pre všetky slová všetkých dokumentov
-- `SCRIPT_DIR` – absolútna cesta k priečinku skriptu, aby fungoval nezávisle od toho, odkiaľ ho spustíme
+Spustenie:
+
+```bash
+python analyze.py --input logs5.csv --outdir analysis_output_simple
+```
+
+Skript overi, ze input existuje a pripravi output priecinok.
 
 ---
 
-### 3. Načítanie textov
+### 3. Nacitanie dat
 
 ```python
-documents = {}
-for fname in TEXT_FILES:
-    fpath = os.path.join(SCRIPT_DIR, fname)
-    with open(fpath, 'r', encoding='utf-8') as f:
-        documents[fname] = f.read()
+df = pd.read_csv(
+    input_path,
+    sep=";",
+    quotechar='"',
+    usecols=USECOLS,
+    low_memory=False,
+)
 ```
 
-- `documents` = slovník `{ 'text1.txt': 'celý text...', ... }` – každý dokument je reťazec
-- `encoding='utf-8'` – správne načítanie špeciálnych znakov
+Nacitavaju sa iba relevantne stlpce, aby bol beh cistejsi a rychlejsi.
 
 ---
 
-### 4. Tokenizácia a lematizácia – funkcia `extract_lemmas`
+### 4. Cistenie textu a cisel
 
-Toto je **jadro skriptu**. Funkcia dostane jeden text a vráti zoznam lém (základných tvarov slov).
+Text:
 
 ```python
-def extract_lemmas(text):
-    lemmas = []
-    tokenized = sent_tokenize(text)          # Krok 1: text → vety
-    for word in tokenized:
-        wordsList = nltk.word_tokenize(word) # Krok 2: veta → tokeny
-        for w in wordsList:
-            w_lower = w.lower()
-            if (w_lower not in stop_words    # filter 1: stop slová
-                and w_lower.isalpha()        # filter 2: len písmená
-                and len(w_lower) > 2):       # filter 3: min. dĺžka
-                lemma_word = lemmatizer.lemmatize(w_lower)  # Krok 4: lema
-                lemmas.append(lemma_word)
-    return lemmas
+series.astype("string").fillna("UNKNOWN").replace({"": "UNKNOWN", "-": "UNKNOWN"})
 ```
 
-**Krok 1 – `sent_tokenize(text)`**: rozdelí text na zoznam viet podľa interpunkcie (`.`, `!`, `?`). Dôvod: lematizátor pracuje lepšie, keď pozná kontext vety.
-
-**Krok 2 – `word_tokenize(veta)`**: rozdelí vetu na jednotlivé tokeny (slová + interpunkcia). Napríklad `"I'm running"` → `["I", "'m", "running"]`.
-
-**Krok 3 – trojité filtrovanie**:
-- `w_lower not in stop_words` – vylúčime funkčné slová bez sémantického obsahu (the, is, are, and, of...)
-- `w_lower.isalpha()` – vylúčime čísla, interpunkciu, URL, špeciálne znaky
-- `len(w_lower) > 2` – vylúčime príliš krátke slová (a, to, of – zvyčajne sú to stop slová, ale nie všetky)
-
-**Krok 4 – `lemmatizer.lemmatize(w_lower)`**: konvertuje slovo na jeho základný slovníkový tvar (lemu):
-
-| Vstupné slovo | Léma |
-|---|---|
-| running | run |
-| companies | company |
-| developing | develop |
-| glaciers | glacier |
-| algorithms | algorithm |
-
-**Rozdiel Lematizácia vs. Stemming:**
-
-| Vlastnosť | Lematizácia | Stemming |
-|---|---|---|
-| Výstup | Skutočné slovníkové slovo | Orezaná prípona (nemusí byť slovo) |
-| Príklad | `running` → `run` | `running` → `runn` |
-| Príklad | `better` → `good` | `better` → `better` |
-| Rýchlosť | Pomalšia | Rýchlejšia |
-| Presnosť | Vyššia | Nižšia |
-| Požiadavka | Potrebuje WordNet databázu | Jednoduchý algoritmus |
-
----
-
-### 5. Slovník unikátnych lém
+Numerika:
 
 ```python
-all_lemmas = sorted(set(l for lemmas in doc_lemmas.values() for l in lemmas))
+pd.to_numeric(df[col], errors="coerce")
 ```
 
-- **generátorový výraz** `l for lemmas in doc_lemmas.values() for l in lemmas` – prechádza cez lémy všetkých dokumentov naraz (dvojitý for v jednom výraze)
-- `set(...)` – odstráni duplicity, každá léma je zastúpená len raz
-- `sorted(...)` – zoradí abecedne → stĺpce matíc budú vždy v rovnakom deterministickom poradí
+Efekt:
 
-Výsledok: `all_lemmas` je zoznam napr. 150–200 unikátnych slov, ktoré tvoria **stĺpce** všetkých matíc.
+- text ma jednotnu reprezentaciu,
+- nevalidne cisla nesposobia pad,
+- dalsie groupby/testy maju konzistentny vstup.
 
 ---
 
-### 6. TF – frekvenčná matica
+### 5. Derivacia casovych premennych z unixTime
 
 ```python
-tf_matrix = pd.DataFrame(0, index=doc_names, columns=all_lemmas)
-
-for doc_name, lemmas in doc_lemmas.items():
-    for lemma in lemmas:
-        tf_matrix.loc[doc_name, lemma] += 1
+ts = pd.to_datetime(df["unixTime"], unit="s", errors="coerce", utc=True)
+df["hour"] = ts.dt.hour
+df["dayofweek"] = ts.dt.dayofweek
 ```
 
-- Vytvoríme DataFrame naplnený nulami, kde riadky sú dokumenty a stĺpce sú lémy
-- Pre každý dokument prechádzame jeho lémy a inkrementujeme príslušnú bunku
-- `tf_matrix.loc[doc_name, lemma]` – prístup k bunke cez **label-based indexing**
-
-Výsledok: matica s **absolútnymi frekvenciami** – koľkokrát sa daná léma vyskytuje v danom dokumente.
+Tieto premenne sluzia ako IV pre temporalne analyzy.
 
 ---
 
-### 7. Binárna matica
+### 6. Spearman po rokoch
+
+Priprava:
 
 ```python
-binary_matrix = (tf_matrix > 0).astype(int)
+weekly = (
+    df.dropna(subset=["year", "week"])
+      .groupby(["year", "week"])
+      .size()
+      .reset_index(name="visits")
+      .sort_values(["year", "week"])
+)
 ```
 
-- `(tf_matrix > 0)` – porovnanie každej bunky s nulou, výsledok je DataFrame s hodnotami `True`/`False`
-- `.astype(int)` – konverzia: `True → 1`, `False → 0`
-- Celá operácia je **vektorizovaná** – pandas ju aplikuje na celú maticu naraz bez cyklu
-
----
-
-### 8. Logaritmická matica
+Vypocet:
 
 ```python
-log_matrix = tf_matrix.apply(lambda col: col.map(lambda x: round(math.log10(1 + x), 4)))
+x = np.arange(len(grp), dtype=float)
+y = grp["visits"].to_numpy(dtype=float)
+sp = scipy_stats.spearmanr(x, y)
 ```
 
-- `tf_matrix.apply(lambda col: ...)` – prechádza každý **stĺpec** (lemu) ako pandas Series
-- `col.map(lambda x: ...)` – aplikuje funkciu na každú **bunku** v stĺpci
-- `math.log10(1 + x)` – aplikuje logaritmický vzorec
-- `round(..., 4)` – zaokrúhlenie na 4 desatinné miesta
+Po rokoch sa testuje samostatne, aby sa nezmazali rozdielne trendy medzi rokmi.
 
 ---
 
-### 9. IDF a TF-IDF matica
+### 7. Chi-square + Cramer V
+
+Kontingencna tabulka:
 
 ```python
-N = len(doc_names)
-df_series  = (tf_matrix > 0).sum(axis=0)
-idf_series = df_series.apply(lambda df: round(math.log10(N / df), 4) if df > 0 else 0)
-tfidf_matrix = tf_matrix.multiply(idf_series, axis=1).round(4)
+cont = pd.crosstab(chi_df["crisis"], chi_df["category"])
 ```
 
-**Riadok 1:** `N = 5` – celkový počet dokumentov.
-
-**Riadok 2:** `(tf_matrix > 0).sum(axis=0)` – pre každú lému spočíta, v koľkých dokumentoch sa vyskytuje:
-- `(tf_matrix > 0)` – boolovská matica True/False
-- `.sum(axis=0)` – sumuje **po stĺpcoch** (cez riadky/dokumenty); `True` sa počíta ako 1
-- Výsledok: `df_series` je Series s jednou hodnotou (document frequency) na každú lému
-
-**Riadok 3:** IDF pre každú lému; podmienka `if df > 0 else 0` chráni pred delením nulou.
-
-**Riadok 4:** `tf_matrix.multiply(idf_series, axis=1)` – násobí každý **stĺpec** matice príslušnou IDF hodnotou; `axis=1` (alebo `axis='columns'`) hovorí pandasom, aby zarovnal IDF vektor podľa stĺpcov.
-
----
-
-### 10. Export do Excelu
+Test + efekt:
 
 ```python
-OUTPUT_FILE = os.path.join(SCRIPT_DIR, 'lemma_matrices.xlsx')
-with pd.ExcelWriter(OUTPUT_FILE, engine='openpyxl') as writer:
-    tf_matrix.to_excel(writer,     sheet_name='TF_frekvencia')
-    binary_matrix.to_excel(writer, sheet_name='Binarna')
-    log_matrix.to_excel(writer,    sheet_name='Logaritmicka')
-    tfidf_matrix.to_excel(writer,  sheet_name='TF-IDF')
-    idf_df = idf_series.reset_index()
-    idf_df.columns = ['Lema', 'IDF']
-    idf_df.to_excel(writer,        sheet_name='IDF', index=False)
+chi2_stat, chi2_p, chi2_dof, _ = scipy_stats.chi2_contingency(cont.to_numpy(dtype=float))
+n_total = float(cont.to_numpy(dtype=float).sum())
+min_dim = min(cont.shape[0], cont.shape[1]) - 1
+cramer_v = float(np.sqrt(chi2_stat / (n_total * min_dim)))
 ```
 
-- `pd.ExcelWriter` použitý ako **context manager** (`with`) – súbor sa automaticky správne zatvorí a uloží aj pri chybe
-- `engine='openpyxl'` – knižnica zodpovedná za zápis do formátu `.xlsx`
-- `idf_series.reset_index()` – prevedie pandas Series na DataFrame (pridá stĺpec s názvami lém ako index)
+Chi-square hovori o vyznamnosti, Cramer V o sile zavislosti.
 
 ---
 
-## Štatistické metódy a vzorce
+### 8. Kruskal-Wallis
 
-### 1. TF – Term Frequency (absolútna frekvencia)
+Priprava skupin:
+
+```python
+for cat, grp in kr_df.groupby("category"):
+    vals = grp["length"].to_numpy(dtype=float)
+    if len(vals) >= 5:
+        groups.append(vals)
+```
+
+Vypocet:
+
+```python
+h_stat, p_val = scipy_stats.kruskal(*groups)
+```
+
+Porovnava sa rozdiel dlzky navstevy medzi viacerymi kategoriami.
+
+---
+
+### 9. Ulozenie reportu
+
+```python
+report_path = outdir / "report.txt"
+report_path.write_text("\n".join(lines), encoding="utf-8")
+```
+
+Report je pripraveny pre rychlu obhajobu bez nutnosti citat cely kod.
+
+---
+
+### 10. Vizualizacie
+
+year x week heatmapa:
+
+```python
+pivot_wy = wy.groupby(["year", "week"]).size().unstack(fill_value=0)
+pivot_wy = pivot_wy.reindex(columns=list(range(1, 54)), fill_value=0)
+```
+
+Grafy pomahaju vysvetlit vysledky intuitivnejsie ako samotne tabulky.
+
+---
+
+## Statisticke metody a vzorce
+
+### 1. Spearmanova korelacia
 
 $$
-TF(d,\, t) = \text{počet výskytov lémy } t \text{ v dokumente } d
+r_s = corr(rank(X), rank(Y))
 $$
 
-kde $d$ = dokument, $t$ = term (léma).
+Hypotezy:
 
-**Čo reprezentuje:** Koľkokrát sa dané slovo objaví v texte. Základná miera relevancie.
-
-**Výhoda:** Jednoduchosť, priama interpretácia.
-
-**Nevýhoda:** Dlhší dokument bude mať vyššie TF pre všetky slová, aj keď nie je "viac o téme". Navyše bežné slová (aj po odstránení stop slov) môžu dominovať.
+- H0: neexistuje monotonna zavislost
+- H1: existuje monotonna zavislost
 
 ---
 
-### 2. Binárna reprezentácia
+### 2. Chi-square test nezavislosti
 
 $$
-bin(d,\, t) =
-\begin{cases}
-1 & \text{ak } TF(d, t) > 0 \\
-0 & \text{inak}
-\end{cases}
+\chi^2 = \sum_i\sum_j \frac{(O_{ij}-E_{ij})^2}{E_{ij}}
 $$
 
-**Čo reprezentuje:** Iba prítomnosť alebo neprítomnosť lémy. Nezáleží na počte výskytov.
+Hypotezy:
 
-**Príklad:** Léma `algorithm` sa v `text1.txt` vyskytuje 5-krát → binárna hodnota = **1**.
-
-**Výhoda:** Extrémne jednoduchá, rýchla.
-
-**Nevýhoda:** Stratí sa celá informácia o frekvencii – slovo s výskytom 1× a 100× majú rovnakú váhu 1.
+- H0: crisis a category su nezavisle
+- H1: crisis a category su zavisle
 
 ---
 
-### 3. Logaritmická TF
+### 3. Cramer V
 
 $$
-\log TF(d,\, t) =
-\begin{cases}
-1 + \log_{10}(TF(d,\, t)) & \text{ak } TF(d, t) > 0 \\
-0 & \text{inak}
-\end{cases}
+V = \sqrt{\frac{\chi^2}{n \cdot min(r-1, c-1)}}
 $$
 
-**Prečo +1:** Bez +1 by platilo $\log_{10}(1) = 0$, čo by dalo hodnotu 0 slovu s jedným výskytom – rovnako ako slovu, ktoré sa nevyskytuje vôbec. Posun o 1 zaručuje $\log TF > 0$ pre každé slovo, ktoré sa vyskytuje.
+Interpretacia:
 
-**Prečo logaritmus:** Surová frekvencia rastie lineárne, ale jej *informatívna hodnota* rastie oveľa pomalšie. Logaritmus "skrotí" rozsah hodnôt:
-
-| TF (surové) | $\log_{10}(TF)$ | $1 + \log_{10}(TF)$ |
-|---|---|---|
-| 1 | 0 | 1.000 |
-| 10 | 1 | 2.000 |
-| 100 | 2 | 3.000 |
-| 1 000 | 3 | 4.000 |
-
-Slovo s TF = 100 je len **3×** dôležitejšie (nie 100×) ako slovo s TF = 1.
+- okolo 0.1 slaby efekt
+- okolo 0.3 stredny efekt
+- okolo 0.5 silny efekt
 
 ---
 
-### 4. IDF – Inverse Document Frequency (inverzná dokumentová frekvencia)
+### 4. Kruskal-Wallisov test
 
 $$
-IDF(t) = \log_{10}\left(\frac{N}{df(t)}\right)
+H = \frac{12}{N(N+1)}\sum_{i=1}^{k}\frac{R_i^2}{n_i} - 3(N+1)
 $$
 
-kde:
-- $N$ = celkový počet dokumentov v kolekcii (tu: 5)
-- $df(t)$ = document frequency = počet dokumentov, v ktorých sa léma $t$ vyskytuje (má TF > 0)
+Hypotezy:
 
-**Čo reprezentuje:** Ako **vzácna** je léma naprieč celou kolekciou. Čím vzácnejšia, tým vyššie IDF.
-
-**Limitné prípady (dôležité pre skúšku):**
-
-| Situácia | Výpočet | IDF | Interpretácia |
-|---|---|---|---|
-| Léma je vo **všetkých** dokumentoch ($df = N$) | $\log_{10}(5/5) = \log_{10}(1)$ | **0** | Neinformatívna – nedokáže odlíšiť dokumenty |
-| Léma je v **jedinom** dokumente ($df = 1$) | $\log_{10}(5/1) = \log_{10}(5)$ | **max ≈ 0.699** | Unikátna – maximálna diskriminačná sila |
-| Léma je v **polovici** dokumentov ($df = N/2$) | $\log_{10}(2)$ | **≈ 0.301** | Stredná diskriminačná sila |
-
-**Kód výpočtu:**
-```python
-df_series  = (tf_matrix > 0).sum(axis=0)
-idf_series = df_series.apply(lambda df: round(math.log10(N / df), 4) if df > 0 else 0)
-```
-
-- `(tf_matrix > 0)` → boolovská matica
-- `.sum(axis=0)` → pre každý stĺpec (lému) spočíta, v koľkých riadkoch (dokumentoch) je True
-- `if df > 0 else 0` → ochrana pred `log10(5/0) = log10(∞)`
+- H0: skupiny sa nelisia
+- H1: aspon jedna skupina sa lisi
 
 ---
 
-### 5. TF-IDF
+## Vysvetlenie klucovych operacii v kode
 
-$$
-TFIDF(d,\, t) = TF(d,\, t) \times IDF(t) = TF(d,\, t) \times \log_{10}\left(\frac{N}{df(t)}\right)
-$$
+### groupby(...).size()
 
-V implementácii je TF-IDF vypočítané z **absolútneho TF** (nie z logaritmického):
+Spocita pocet riadkov v skupinach.
 
-```python
-tfidf_matrix = tf_matrix.multiply(idf_series, axis=1).round(4)
-```
+### reset_index(name="visits")
 
-**Čo reprezentuje:** Dôležitosť lémy v konkrétnom dokumente *relatívne voči celej kolekcii*. Slovo musí byť:
-- **Časté** v danom dokumente (vysoké TF), **A zároveň**
-- **Vzácne** v ostatných dokumentoch (vysoké IDF)
+Agregovany vysledok vrati do klasickeho DataFrame formatu.
 
-**Príklady interpretácie:**
+### pd.crosstab(a, b)
 
-| Situácia | TF | IDF | TF-IDF | Záver |
-|---|---|---|---|---|
-| Slovo časté v 1 dok., vzácne inde | Vysoké | Vysoké | **Vysoké** | Kľúčové slovo dokumentu |
-| Slovo časté vo VŠETKÝCH dok. | Vysoké | 0 | **0** | Neinformatívne |
-| Slovo vzácne v 1 dok. | Nízke | Vysoké | **Nízke** | Marginálny výskyt |
+Vytvori kontingencnu tabulku dvoch kategorickych premennych.
 
----
+### unstack(fill_value=0)
 
-## Vysvetlenie kľúčových operácií v kóde
+Zmeni indexovu uroven na stlpce a pripravi data pre maticove zobrazenie.
 
-### `axis=0` vs `axis=1`
+### reindex(columns=range(1,54), fill_value=0)
 
-```
-            léma1  léma2  léma3
-text1.txt     3      0      1
-text2.txt     0      2      4
-text3.txt     1      1      0
+Doplni chybajuce tyzdne tak, aby mali vsetky roky rovnaku os.
 
-axis=0: sumujeme NADOL (cez riadky) → výsledok = 1 hodnota na STĹPEC
-        → [4, 3, 5]   (document frequency pre každú lému)
+### dropna(subset=[...])
 
-axis=1: sumujeme DOPRAVA (cez stĺpce) → výsledok = 1 hodnota na RIADOK
-        → [4, 6, 2]   (celkový počet lém v každom dokumente)
-```
-
-### `apply` + `map` vs `multiply`
-
-- `tf_matrix.apply(lambda col: col.map(lambda x: ...))` – aplikuje vlastnú Python funkciu na každú bunku; flexibilné, ale pomalšie (Python overhead)
-- `tf_matrix.multiply(idf_series, axis=1)` – čistá pandas/numpy operácia; automatické zarovnanie podľa stĺpcov (broadcasting); rýchlejšie
-
-### Ochrana pred delením nulou
-
-```python
-idf_series = df_series.apply(lambda df: round(math.log10(N / df), 4) if df > 0 else 0)
-```
-
-Podmienka `if df > 0 else 0` zabezpečí, že ak by sa léma nevyskytovala v žiadnom dokumente (čo sa tu nemôže stať, ale je to obranný kód), nevyhodí sa `ZeroDivisionError`. Ak skript spustíme nad prázdnymi súbormi, nezlyhá.
-
-### `os.path.join` a `os.path.abspath`
-
-```python
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-fpath = os.path.join(SCRIPT_DIR, fname)
-```
-
-- `__file__` = cesta k aktuálnemu `.py` súboru
-- `os.path.abspath(...)` = prevod na absolútnu cestu (funguje aj pri relatívnych cestách)
-- `os.path.dirname(...)` = extrakcia priečinka (bez názvu súboru)
-- `os.path.join(...)` = zostavenie cesty kompatibilne so všetkými OS (Windows používa `\`, Unix `/`)
+Vyhodi iba riadky, ktore su pre konkretny vypocet nepouzitelne.
 
 ---
 
-## Code flow – diagram
+## Code flow - diagram
 
-```
+```text
 START
-  │
-  ├─► Stiahnutie NLTK dát (punkt, wordnet, stopwords)
-  │
-  ├─► Načítanie text1.txt – text5.txt → documents {}
-  │
-  ├─► Pre každý dokument: extract_lemmas(text)
-  │     ├─ sent_tokenize → vety
-  │     ├─ word_tokenize → tokeny
-  │     ├─ .lower() + filtrovanie (stop slová, isalpha, dĺžka)
-  │     └─ lemmatizer.lemmatize → lémy
-  │
-  ├─► all_lemmas = sorted(set( všetky lémy ))
-  │
-  ├─► tf_matrix  ← počítadlo výskytov lém (riadky=dok., stĺpce=lémy)
-  ├─► binary_matrix = (tf_matrix > 0).astype(int)
-  ├─► log_matrix = apply( log10(1 + TF) )
-  ├─► df_series  = (tf_matrix > 0).sum(axis=0)
-  ├─► idf_series = log10(N / df)
-  └─► tfidf_matrix = tf_matrix × idf_series
-        │
-        └─► ExcelWriter → lemma_matrices.xlsx (5 listov)
-END
+  |
+  +--> parse args
+  |
+  +--> load_data
+  |      +--> read_csv
+  |      +--> normalize text
+  |      +--> to_numeric
+  |      +--> derive hour/dayofweek
+  |
+  +--> compute_statistics
+  |      +--> Spearman
+  |      +--> Chi-square + Cramer V
+  |      +--> Kruskal-Wallis
+  |
+  +--> save_report
+  |
+  +--> make_plots
+  |
+ END
 ```
 
 ---
 
-## Porovnanie všetkých reprezentácií
+## Porovnanie pouzitych testov
 
-| Vlastnosť | TF | Binárna | Logaritmická TF | TF-IDF |
-|---|---|---|---|---|
-| Rozsah hodnôt | $[0, \infty)$ | $\{0, 1\}$ | $[0, \infty)$ | $[0, \infty)$ |
-| Zachováva frekvenciu? | Áno (lineárne) | Nie | Áno (log-škála) | Áno (log-škála) |
-| Zohľadňuje vzácnosť slova? | Nie | Nie | Nie | **Áno** |
-| Penalizuje bežné slová? | Nie | Nie | Nie | **Áno** |
-| Typické použitie | Základná analýza | Boolean retrieval | Vyhľadávanie | Štandard v IR |
-
----
-
-## Otázky, ktoré môže položiť profesor
-
-**Q: Čo je tokenizácia a prečo delíme najprv na vety?**
-A: Tokenizácia je rozbitie textu na menšie časti (tokeny). Delíme najprv na vety pomocou `sent_tokenize`, pretože niektoré NLP nástroje (napr. tagger slovných druhov) pracujú presnejšie v kontexte celej vety. Potom každú vetu rozdelíme na slová pomocou `word_tokenize`.
+| Test | Typ dat | Co overuje | Vystup |
+|---|---|---|---|
+| Spearman | poradia + numerika | trend navstevnosti v case | rho, p |
+| Chi-square | kategoricke x kategoricke | zavislost crisis vs category | chi2, p, dof |
+| Cramer V | efektova miera | sila zavislosti | V |
+| Kruskal-Wallis | viac skupin numeriky | rozdiely length medzi category | H, p |
 
 ---
 
-**Q: Čo je lematizácia a čím sa líši od stemmingu?**
-A: **Lematizácia** konvertuje slovo na jeho základný slovníkový tvar (lemu) s použitím gramatických pravidiel a databázy WordNet. Výsledok je vždy platné slovo (`running → run`, `better → good`). **Stemming** len mechanicky odrežie príponu pomocou heuristík – výsledok nemusí byť platné slovo (`running → runn`). Lematizácia je presnejšia, ale pomalšia.
+## Aktualne vysledky
+
+### Zakladny profil
+
+- pocet zaznamov: 2 071 235
+- unikatnych anonymnych IP: 6 912
+
+### Spearman po rokoch
+
+- 2009: rho=-0.5621, p=1.1880e-05 (vyznamne)
+- 2010: rho=-0.2473, p=7.4211e-02 (nevyznamne)
+- 2011: rho=-0.6305, p=4.2064e-07 (vyznamne)
+- 2012: rho=0.4378, p=1.0454e-03 (vyznamne)
+
+### Chi-square + Cramer V
+
+- chi2=225219.72
+- df=5
+- p=0.0000e+00
+- V=0.3298
+
+### Kruskal-Wallis
+
+- H=13606.97
+- p=0.0000e+00
+
+Prakticky zaver:
+
+- crisis a category su vyznamne zavisle,
+- length sa medzi kategoriami vyznamne lisi,
+- trend navstevnosti sa medzi rokmi meni.
+
+Detailna interpretacia:
+
+- Spearman: roky 2009 a 2011 maju vyznamny klesajuci trend, rok 2012 vyznamny rastuci trend, rok 2010 nema vyznamny trend.
+- Chi-square + Cramer V: zavislost medzi crisis a category je velmi silno statisticky potvrdena, s prakticky strednou silou efektu (V=0.3298).
+- Kruskal-Wallis: rozdiely v dlzke navstevy medzi kategoriami nie su nahodne, ale systematicke.
 
 ---
 
-**Q: Prečo filtrujem stop slová, krátke slová a nealfabetické tokeny?**
-A: **Stop slová** (the, is, are, and...) sú funkčné slová bez sémantického obsahu – nemôžu odlíšiť dokumenty od seba. **Krátke slová** (< 3 znaky) sú zvyčajne predložky alebo zámenká, ktoré nesú málo informácie. **Nealfabetické tokeny** (čísla, interpunkcia, URL) by "znečistili" slovník nepotrebnými symbolmi.
+## Ako citat grafy pri obhajobe
+
+### visits_by_yearquartal.png
+
+- ukazuje dlhodoby vyvoj navstevnosti po kvartaloch,
+- vhodny na komentar, ci sa navstevnost dlhodobo zvysuje, znizuje alebo kolise.
+
+### heatmap_day_hour.png
+
+- os X je hodina, os Y je den v tyzdni,
+- tmavsia farba znamena vyssiu aktivitu,
+- vhodna na rychlu identifikaciu casovych spiciek navstevnosti.
+
+### heatmap_week_year.png
+
+- os X je tyzden 1-53, os Y je rok,
+- vhodna na porovnanie sezonnych vzorov medzi rokmi,
+- odhali obdobia s neobvyklym poklesom alebo rastom.
+
+### top_category.png
+
+- rychly prehlad dominantnych kategorii obsahu,
+- vhodny uvodny graf pri ustnej obhajobe.
 
 ---
 
-**Q: Prečo TF a nie raw word count?**
-A: TF a raw count sú tu to isté – oba sú absolútne počty výskytov. Surová frekvencia má nevýhodu, že dlhší dokument bude mať prirodzene vyššie TF pre všetky slová. Preto sa v pokročilejších systémoch TF normalizuje dĺžkou dokumentu. V tomto skripte sa normalizácia nerobí – pracujeme so surovým TF a kompenzujeme pomocou log-škálovania a IDF.
+## Otazky, ktore moze polozit profesor
+
+Q: Preco Spearman a nie Pearson?
+
+A: Spearman je vhodny na monotonne vztahy a je robustny pri nenormalnych datach.
+
+Q: Preco Chi-square?
+
+A: crisis aj category su kategoricke premenne.
+
+Q: Naco je Cramer V?
+
+A: Na silu efektu po Chi-square teste.
+
+Q: Co dokazuje Kruskal-Wallis?
+
+A: Ze aspon jedna kategoria ma inu distribuciu dlzky navstevy.
+
+Q: Ako viem, ze zadanie je splnene?
+
+A: Su zahrnute premenne z oboch skupin a testovane su viacere vztahy medzi nimi.
 
 ---
 
-**Q: Prečo pri log TF používame +1?**
-A: Bez +1 by platilo $\log_{10}(1) = 0$, čo by dalo váhu 0 slovu s jedným výskytom – rovnako ako slovu s výskytom 0. Posun o +1 zaručí $1 + \log_{10}(1) = 1$, čo správne odlíši prítomnosť od neprítomnosti.
+## Predpoklady testov a limity
+
+### Spearman
+
+- nevyzaduje normalitu,
+- predpoklada monotonnost.
+
+### Chi-square
+
+- predpoklada nezavislost pozorovani,
+- citlivy na male ocakavane pocetnosti.
+
+### Kruskal-Wallis
+
+- nevyzaduje normalitu,
+- po vyznamnom vysledku je vhodny post-hoc test.
+
+### Vseobecne limity
+
+- observacne data nie su kauzalny dokaz,
+- pri velkom N su p-hodnoty velmi citlive,
+- efektove miery (Cramer V) su dolezite.
 
 ---
 
-**Q: Čo sa stane, ak $df = N$ (léma je vo všetkých dokumentoch)?**
-A: $IDF = \log_{10}(N/N) = \log_{10}(1) = 0$. TF-IDF bude nulové pre všetky dokumenty. Léma nedokáže odlíšiť dokumenty medzi sebou – nemá diskriminačnú silu.
+## Minimalny scenar na obhajobu (90 sekund)
+
+1. Vybral som DV premenne obsahu a IV premenne casu.
+2. Data som vycistil a z unixTime odvodil hour a dayofweek.
+3. Otestoval som Spearman, Chi-square + Cramer V a Kruskal-Wallis.
+4. Vysledky som ulozil do reportu a grafov.
+5. Zaver: zadanie je splnene a vysledky su statisticky podlozene.
 
 ---
 
-**Q: Čo sa stane, ak $df = 1$ (léma je iba v jednom dokumente)?**
-A: $IDF = \log_{10}(N/1) = \log_{10}(5) \approx 0.699$. Léma dostane maximálnu IDF hodnotu – je unikátna pre daný dokument, čo je veľmi informatívne. TF-IDF bude v tomto dokumente vysoké a v ostatných nulové.
+## Zhrnutie najdolezitejsich funkcii
 
----
-
-**Q: Čo znamená `axis=0` pri `.sum(axis=0)`?**
-A: `axis=0` znamená sumovanie **smerom nadol** – teda cez riadky (dokumenty). Pre každý stĺpec (lému) dostaneme jeden súčet. Výsledkom je Series s jednou hodnotou na každú lému. `axis=1` by sumovalo cez stĺpce – výsledkom by bolo jedno číslo na každý dokument.
-
----
-
-**Q: Prečo ukladáme štyri rôzne matice namiesto jednej?**
-A: Každá reprezentácia je vhodná pre inú úlohu:
-- **TF** = základná analýza, vstup pre ďalšie výpočty
-- **Binárna** = keď záleží len na prítomnosti (Boolean vyhľadávanie, spam filter)
-- **Logaritmická TF** = keď záleží na frekvencii, ale chceme potlačiť dominanciu veľmi frekventovaných slov
-- **TF-IDF** = keď chceme zvýrazniť charakteristické slová každého dokumentu (vyhľadávanie, klasifikácia, zhlukovanie)
-
----
-
-**Q: Prečo `multiply(idf_series, axis=1)` a nie priame `*`?**
-A: `idf_series` je jednorozmerný vektor (Series) s hodnotou pre každú lému. Pri použití `*` by pandas mohol zarovnávať indexy nesprávne. `multiply(..., axis=1)` explicitne hovorí: "zarovnaj tento vektor podľa **stĺpcov** matice" – každý stĺpec matice (každá léma) sa vynásobí príslušnou IDF hodnotou. Je to pandas Broadcasting.
-
----
-
-**Q: Aký je rozdiel medzi `apply` a `map`?**
-A: `df.apply(func)` aplikuje funkciu na **stĺpec alebo riadok** (Series). `series.map(func)` aplikuje funkciu na každý **element** Series. V kóde sú kombinované: `apply` prechádza stĺpce, `map` aplikuje vzorec na každú bunku v stĺpci.
-
----
-
-**Q: Prečo sa používa `set()` na stop slová?**
-A: Vyhľadávanie v `set` je O(1) – konštantný čas, nezávislý od počtu stop slov. V `list` by bolo O(n). Keďže filtrovanie prebehne pre každé slovo každého dokumentu, ide o tisíce porovnaní – set je výrazne efektívnejší.
-
----
-
-**Q: Čo je `doc_frequency` a ako sa líši od `term_frequency`?**
-A:
-- **Term Frequency** (TF) – koľkokrát sa slovo vyskytuje **v konkrétnom dokumente**; závisí od dokumentu aj slova
-- **Document Frequency** (df) – v koľkých dokumentoch sa slovo vôbec vyskytuje; závisí iba od slova, nie od konkrétneho dokumentu. Používa sa na výpočet IDF.
-
----
-
-## Zhrnutie najdôležitejších funkcií
-
-| Funkcia / operácia | Modul | Účel |
+| Funkcia / operacia | Modul | Ucel |
 |---|---|---|
-| `sent_tokenize(text)` | `nltk` | Rozdelenie textu na vety |
-| `word_tokenize(veta)` | `nltk` | Rozdelenie vety na tokeny (slová + interpunkcia) |
-| `lemmatizer.lemmatize(slovo)` | `nltk.stem` | Prevod slova na základný tvar (lemu) |
-| `stopwords.words('english')` | `nltk.corpus` | Zoznam stop slov pre angličtinu |
-| `set(...)` | Python | Množina pre O(1) vyhľadávanie |
-| `str.isalpha()` | Python | True ak reťazec obsahuje iba písmená |
-| `pd.DataFrame(0, index=..., columns=...)` | `pandas` | Vytvorenie matice naplnenej nulami |
-| `df.loc[riadok, stlpec]` | `pandas` | Label-based prístup k bunke |
-| `(df > 0).astype(int)` | `pandas` | Boolovská maska prevedená na 0/1 |
-| `df.apply(lambda col: col.map(...))` | `pandas` | Aplikácia funkcie na každú bunku |
-| `(df > 0).sum(axis=0)` | `pandas` | Počet nenulových hodnôt v každom stĺpci |
-| `df.multiply(series, axis=1)` | `pandas` | Násobenie matice vektorom po stĺpcoch |
-| `math.log10(x)` | `math` | Logaritmus base 10 |
-| `series.reset_index()` | `pandas` | Prevod Series na DataFrame |
-| `pd.ExcelWriter(...)` | `pandas` | Zápis viacerých listov do jedného xlsx |
+| pd.read_csv(..., usecols=...) | pandas | nacitanie iba potrebnych stlpcov |
+| normalize_text(series) | vlastna funkcia | zjednotenie textu |
+| pd.to_numeric(..., errors="coerce") | pandas | bezpecna konverzia na cisla |
+| pd.to_datetime(..., unit="s") | pandas | prevod unixTime |
+| groupby(...).size() | pandas | agregacia poctov |
+| pd.crosstab(a, b) | pandas | kontingencna tabulka |
+| scipy_stats.spearmanr(x, y) | scipy | Spearmanov test |
+| scipy_stats.chi2_contingency(table) | scipy | Chi-square test |
+| np.sqrt(chi2/(n*min_dim)) | numpy | Cramer V |
+| scipy_stats.kruskal(*groups) | scipy | Kruskal-Wallis |
+| Path.write_text(...) | pathlib | zapis reportu |
+
+---
+
+## Kontrolny zoznam pred odovzdanim
+
+- skript bezi bez chyby
+- vznikne analysis_output_simple/report.txt
+- vzniknu 4 PNG grafy
+- report obsahuje Spearman, Chi-square, Cramer V, Kruskal
+- vies vysvetlit kazdy test aj graf
+
+---
+
+## Co doplnit pre este silnejsiu verziu
+
+- post-hoc test po Kruskalovi (napr. Dunn), aby bolo jasne, ktore dvojice kategorii sa lisia,
+- boxplot length podla category,
+- samostatna analyza internal vs external,
+- kratke prakticke odporucania pre banku z vysledkov analyzy.
+
+---
+
+## Exam mode - tahak (v tom istom subore)
+
+### 1) Co je ciel zadania
+
+- pouzit premenne z viac skupin,
+- otestovat vztahy medzi premennymi.
+
+V analyze.py je to splnene:
+
+- DV: category, webPart, urlExt
+- IV: year, quartal, yearQuartal, week, hour, dayofweek, crisis
+- dalsie: length, internal, anonIP
+
+### 2) Pipeline v 5 bodoch
+
+1. Nacitanie CSV (iba potrebne stlpce)
+2. Cistenie dat (text normalizacia, numerika cez coerce)
+3. Derivacia hour/dayofweek z unixTime
+4. Statistika (Spearman, Chi-square + Cramer V, Kruskal-Wallis)
+5. Vystup (report.txt + 4 grafy)
+
+### 3) Klucove testy
+
+Spearman (trend navstevnosti):
+
+- data: navstevy po year + week,
+- testuje monotonnu zavislost navstevnosti v case,
+- interpretacia: rho > 0 rast, rho < 0 pokles, p < 0.05 vyznamne.
+
+Chi-square + Cramer V (crisis vs category):
+
+- data: kontingencna tabulka crisis x category,
+- Chi-square: ci existuje zavislost,
+- Cramer V: aka je silna.
+
+Kruskal-Wallis (length medzi category):
+
+- data: skupiny length podla category,
+- testuje, ci sa aspon jedna skupina lisi.
+
+### 4) Realne vysledky, ktore mas povedat
+
+- N = 2 071 235 zaznamov
+- unikatnych anonIP = 6 912
+- Spearman:
+    - 2009: rho=-0.5621, p=1.1880e-05 (vyznamne)
+    - 2010: rho=-0.2473, p=7.4211e-02 (nevyznamne)
+    - 2011: rho=-0.6305, p=4.2064e-07 (vyznamne)
+    - 2012: rho=0.4378, p=1.0454e-03 (vyznamne)
+- Chi-square + Cramer V:
+    - chi2=225219.72, df=5, p=0.0000e+00, V=0.3298
+- Kruskal-Wallis:
+    - H=13606.97, p=0.0000e+00
+
+### 5) Jedna veta na zaver
+
+Zadanie je splnene, lebo analyza obsahuje IV aj DV premenne, testuje viacero vztahov (trend, zavislost, rozdiely medzi skupinami) a vysledky su reportovane textom aj grafmi.
+
+### 6) 30-sekundovy oral script
+
+Vybral som DV premenne obsahu a IV premenne casu. Data som vycistil, z unixTime som odvodil hour a dayofweek a potom som otestoval tri vztahy: Spearman pre trend navstevnosti, Chi-square s Cramer V pre crisis vs category a Kruskal-Wallis pre length medzi kategoriami. Vysledky su v reporte a 4 grafoch. Zaver je, ze vztahy su statisticky vyznamne a analyza splna zadanie.
+
+---
+
+## 20 otazok a odpovedi na skusku (v tom istom subore)
+
+1. Co bolo hlavne zadanie?
+Pouzit premenne z viac skupin a analyzovat vztahy medzi premennymi.
+
+2. Ktore premenne su DV?
+category, webPart, urlExt (obsah webu).
+
+3. Ktore premenne su IV?
+year, quartal, yearQuartal, week, hour, dayofweek, crisis (cas a obdobie).
+
+4. Naco sluzi length?
+Je to behavior premenna, dlzka navstevy stranky.
+
+5. Preco sa robi normalizacia textu?
+Aby prazdne, -, NaN neboli tri rozne kategorie; vsetko ide na jednotne UNKNOWN.
+
+6. Preco sa pouziva errors="coerce" pri numerike?
+Nevalidne hodnoty sa zmenia na NaN, skript nespadne.
+
+7. Ako vznikaju hour a dayofweek?
+Z unixTime cez pd.to_datetime(..., unit="s", utc=True), potom dt.hour a dt.dayofweek.
+
+8. Co znamena dayofweek = 0?
+Pondelok.
+
+9. Preco Spearman a nie Pearson?
+Spearman testuje monotonne vztahy cez poradia a je robustnejsi pri nenormalnych datach.
+
+10. Na com je Spearman pocitany?
+Na pocte navstev po dvojici year + week, osobitne pre kazdy rok.
+
+11. Co testuje Chi-square v tomto skripte?
+Ci su crisis a category nezavisle alebo zavisle.
+
+12. Co je Cramer V?
+Efektova miera k Chi-square, hovori o sile zavislosti.
+
+13. Ako citat Cramer V = 0.3298?
+Priblizne stredne silna zavislost.
+
+14. Preco Kruskal-Wallis?
+Porovnava viac skupin length medzi kategoriami bez nutnosti normalneho rozdelenia.
+
+15. Co znamena vyznamny Kruskal-Wallis?
+Aspoň jedna kategoria sa lisi od ostatnych v distribucii length.
+
+16. Co su hlavne vystupy skriptu?
+report.txt a 4 grafy: visits_by_yearquartal, heatmap_day_hour, heatmap_week_year, top_category.
+
+17. Co hovoria realne vysledky Spearman?
+2009 a 2011 vyznamny pokles, 2012 vyznamny rast, 2010 nevyznamny trend.
+
+18. Co hovori Chi-square vysledok p=0?
+Zavislost crisis x category je statisticky vyznamna.
+
+19. Co je hlavny limit analyzy?
+Je to observacna analyza, nie experiment; vyznamnost nie je kauzalita.
+
+20. Jedna veta na obhajobu?
+Analyza splna zadanie, lebo pokryva DV aj IV premenne, overuje viacero vztahov troma statistickymi testami a vysledky prezentuje textovo aj graficky.
