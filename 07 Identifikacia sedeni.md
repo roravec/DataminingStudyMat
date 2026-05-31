@@ -93,7 +93,7 @@ def add_stt_mean(df):
 
 **Vzorec:**
 
-$$\text{STT\_Mean} = \overline{Length} = \frac{\sum_{i : Length_i \neq NaN} Length_i}{n}$$
+$$\text{STT}\_\text{Mean} = \overline{Length} = \frac{\sum_{i : Length_i \neq NaN} Length_i}{n}$$
 
 kde $n$ = počet záznamov s platnou (nie `NaN`) hodnotou `Length`.
 
@@ -126,10 +126,10 @@ $$Q_3 = \text{75. percentil(Length)}$$
 
 $$IQR = Q_3 - Q_1 \quad \text{(interkvartilové rozpätie)}$$
 
-$$\text{STT\_Q} = Q_3 + 1.5 \times IQR$$
+$$\text{STT}\_\text{Q} = Q_3 + 1.5 \times IQR$$
 
 **Čo je percentil?**  
-$Q_1 = $ 25. percentil znamená: 25 % hodnôt `Length` je menších alebo rovných $Q_1$, 75 % je väčších. $Q_3 = $ 75. percentil: 75 % hodnôt je menších alebo rovných $Q_3$.
+$Q_1 =$ 25. percentil znamená: 25 % hodnôt `Length` je menších alebo rovných $Q_1$, 75 % je väčších. $Q_3 =$ 75. percentil: 75 % hodnôt je menších alebo rovných $Q_3$.
 
 **Prečo $Q_3 + 1.5 \times IQR$?**  
 Toto je Tukeyho pravidlo z roku 1977. Hodnoty nad touto hranicou sa považujú za **štatisticky neobvyklé** (outliery). Pre normálne rozdelenie zachytí táto hranica ~99,3 % dát — len extrémne dlhé prestávky sú nad ňou.
@@ -578,4 +578,3 @@ Prvý riadok celého DataFrame nemá predchodcu — `shift(1)` pre neho vráti `
 
 **Aký je rozdiel medzi `shift(1)` v `compute_new_session_flags()` (globálny) a `groupby().shift(1)` v `add_href()`?**  
 Globálny `shift(1)` (bez groupby) posunie hodnoty naprieč celým DataFrame — posledný záznam používateľa A dostane UserID/Length prvého záznamu používateľa B. V `compute_new_session_flags()` to nevadí, pretože podmienka `prev_userid != df["UserID"]` práve detekuje takéto hranice. V `add_href()` porovnávame `Referrer` s predošlou URL **toho istého** používateľa — tam by globálny shift dal nesprávny výsledok, preto `groupby("UserID").shift(1)`.
-
