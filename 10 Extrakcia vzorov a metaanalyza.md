@@ -646,6 +646,77 @@ def kendall_w(matica):
 
 ---
 
+## Skutočné výsledky analýzy (čísla na obhajobu)
+
+### Štatistické výsledky – Cochran Q a Kendall W
+
+| Analýza | Q-štatistika | p-hodnota | Záver | Kendall W |
+|---|---|---|---|---|
+| **assoc_cat** | **48.66** | **0.000020** | **Zamietame H₀ – vzory sa menia** | 0.2929 (slabá zhoda) |
+| **assoc_web** | **33.56** | **0.003922** | **Zamietame H₀ – vzory sa menia** | 0.1388 (veľmi slabá) |
+| **seq_cat** | 0.00 | 1.000000 | Nezamietame – vzory sú stabilné | **0.6925** (silná zhoda) |
+| **seq_web** | 0.00 | 1.000000 | Nezamietame – vzory sú stabilné | 0.5074 (stredná zhoda) |
+
+**Čo z toho vyplýva:**
+- Asociačné vzory (`category` aj `webPart`) sa medzi krízou a post-krízou **štatisticky významne zmenili** (obe p < 0.05)
+- Sekvenčné vzory (poradie navigácie) boli **stabilné** vo všetkých 16 kvartáloch (Q = 0, p = 1.0)
+- Kendall W pre seq_cat = 0.69 → kvartály sa silne zhodujú v tom, ktoré sekvenčné vzory sú dominantné
+
+---
+
+### Top najstabilnejšie asociačné vzory (assoc_cat) – prítomné v najviac kvartáloch
+
+| Vzor (pravidlo) | Počet kvartálov | Podiel |
+|---|---|---|
+| `Reputation, We support.. ⟹ Pillar3 related` | **14/16** | 87.5 % |
+| `Pillar3 related, We support.. ⟹ Reputation` | **14/16** | 87.5 % |
+| `We support.. ⟹ Reputation` | 12/16 | 75.0 % |
+| `Pillar3 disclosure requirements ⟹ Pillar3 related` | 10/16 | 62.5 % |
+| `Business Conditions, Reputation ⟹ Pillar3 related` | 9/16 | 56.25 % |
+
+---
+
+### Top najstabilnejšie sekvenčné vzory (seq_cat) – prítomné v najviac kvartáloch
+
+| Vzor (sekvencia) | Počet kvartálov | Podiel |
+|---|---|---|
+| `Pricing List ⟹ Pricing List` | **16/16** | 100 % |
+| `Reputation ⟹ Pillar3 related` | **16/16** | 100 % |
+| `Pillar3 disclosure requirements ⟹ Pillar3 related` | **16/16** | 100 % |
+| `Pillar3 related ⟹ Pillar3 related` | **16/16** | 100 % |
+| `Pillar3 related ⟹ Reputation` | 14/16 | 87.5 % |
+
+---
+
+### Kríza vs. post-kríza – zmena asociačných vzoroch
+
+**Krízové kvartály (09Q1 – 10Q4):** Dominantné vzory:
+- `Pillar3 disclosure requirements ⟹ Pillar3 related` – ľudia hľadali regulačné informácie
+- `We support.. ⟹ Reputation` – záujem o záruky a reputáciu banky
+- `Pillar3 related, We support.. ⟹ Reputation` – kombinovaný záujem regulácia + reputácia
+- Vzory `Business Conditions` sa objavujú len sporadicky
+
+**Post-krízové kvartály (11Q1 – 12Q4):** Dominantné vzory:
+- `Business Conditions, Reputation ⟹ Pillar3 related` – rastie záujem o obchodné podmienky
+- `Pricing List, Reputation ⟹ Pillar3 related` – cenníky + regulácia
+- `Business Conditions` sa objavuje ako antecedent oveľa častejšie ako v kríze
+
+**Záver pre obhajobu:**
+> *"Počas krízy ľudia hľadali informácie o tom, ako banka dodržiava regulácie (Pillar3) a ako ich banka podporuje (We support..). Po kríze sa záujem presunul na obchodné podmienky a cenníky. Toto potvrdzujú štatistické testy: Cochran Q zamietol stabilitu asociačných vzorov (p < 0.001), ale sekvenčné vzory (spôsob navigácie) zostali stabilné (p = 1.0)."*
+
+---
+
+### Rozmer výstupných matíc
+
+| Súbor | Počet vzorov | Počet kvartálov |
+|---|---|---|
+| `pattern_matrix_binary_assoc_cat.csv` | 163 | 16 |
+| `pattern_matrix_binary_assoc_web.csv` | 83 | 16 |
+| `pattern_matrix_binary_seq_cat.csv` | 788 | 16 |
+| `pattern_matrix_binary_seq_web.csv` | 50 | 16 |
+
+---
+
 ## Otázky, ktoré môže položiť profesor
 
 **Q: Čo je transakcia v kontexte tejto analýzy a čo je sekvencia? Aký je medzi nimi rozdiel?**
@@ -684,17 +755,31 @@ A: **Podpostupnosť** vyžaduje len zachovanie poradia prvkov – prvky nemusia 
 ---
 
 **Q: Čo znamená výsledok Cochran Q testu pri $p < 0.05$?**
-A: Zamietame nulovú hypotézu, že proporcia prítomnosti vzoru je rovnaká vo všetkých kvartáloch. Znamená to, že vzory správania sa **štatisticky významne menia** naprieč kvartálmi – napríklad v krízovom období sa objavujú iné vzory ako v post-krízovom. Ak $p \geq 0.05$, nemáme dostatok dôkazov na zamietnutie stability.
+A: Zamietame nulovú hypotézu, že proporcia prítomnosti vzoru je rovnaká vo všetkých kvartáloch. Znamená to, že vzory správania sa **štatisticky významne menia** naprieč kvartálmi. Ak $p \geq 0.05$, nemáme dostatok dôkazov na zamietnutie stability.
+
+V našej analýze: `assoc_cat` dosiahol **Q = 48.66, p = 0.000020** → zamietame H₀ (vzory sa menia). `assoc_web` dosiahol **Q = 33.56, p = 0.003922** → tiež zamietame. `seq_cat` a `seq_web` dosiahli **Q = 0, p = 1.0** → nezamietame (sekvenčné vzory sú stabilné).
 
 ---
 
 **Q: Čo meria Kendallovo W a čo znamená hodnota blízka 1 vs. blízka 0?**
-A: Kendallovo W meria mieru **zhody medzi kvartálmi v poradovom hodnotení** vzorov. $W = 1$ znamená, že všetky kvartály sa zhodujú na tom, ktoré vzory sú dôležitejšie (vyšší výskyt) a ktoré menej – navigačné návyky sú konzistentné. $W = 0$ znamená, že poradie vzorov sa medzi kvartálmi úplne líši – správanie je nestabilné. Hodnota napr. $W = 0.29$ (slabá konkordancia) naznačuje, že asociačné vzory sa medzi krízou a post-krízou výrazne zmenili.
+A: Kendallovo W meria mieru **zhody medzi kvartálmi v poradovom hodnotení** vzorov. $W = 1$ znamená, že všetky kvartály sa zhodujú na tom, ktoré vzory sú dôležitejšie (vyšší výskyt) a ktoré menej – navigačné návyky sú konzistentné. $W = 0$ znamená, že poradie vzorov sa medzi kvartálmi úplne líši – správanie je nestabilné.
+
+V našej analýze: `assoc_cat` má **W = 0.29** (slabá zhoda – vzory sa menili), `assoc_web` má **W = 0.14** (veľmi slabá). Naopak `seq_cat` má **W = 0.69** (silná zhoda – spôsob navigácie bol stabilný) a `seq_web` má **W = 0.51** (stredná zhoda).
 
 ---
 
 **Q: Prečo sa vzorkuje maximálne 2000 sekvencií pri sekvenčnej analýze?**
 A: Vlastná implementácia `apriori_all` prechádza pre každý kandidátny vzor všetky sekvencie (`O(n)` na vzor). Kvartál môže mať desiatky tisíc sekvencií a stovky kandidátnych vzorov – bez obmedzenenia by trvala analýza hodiny. Vzorkovaním 2000 sekvencií zachovávame štatistickú reprezentatívnosť (veľká vzorka) pri rozumnej rýchlosti výpočtu.
+
+---
+
+**Q: Aké konkrétne vzory sa nachádzali v krízovom vs. post-krízovom období?**
+A: **Krízové obdobie (09Q1–10Q4):** Dominovali pravidlá spojené s `Pillar3 disclosure requirements ⟹ Pillar3 related` a `We support.. ⟹ Reputation` – ľudia hľadali informácie o regulačnej zhode banky a jej reputácii počas krízy. **Post-krízové obdobie (11Q1–12Q4):** Pribudli vzory s `Business Conditions` a `Pricing List` – záujem sa presunul od reputácie a regulácií smerom k obchodným podmienkam. Najstabilnejšie vzory prítomné v 14/16 kvartáloch: `Reputation, We support.. ⟹ Pillar3 related` a `Pillar3 related, We support.. ⟹ Reputation`.
+
+---
+
+**Q: Prečo seq_cat matica obsahuje 788 vzorov, ale iné implementácie majú menej?**
+A: Naša implementácia AprioriAll hľadá **podpostupnosti** – prvky vzoru nemusia byť bezprostredne za sebou v sekvencii. To je korektný sekvenčný prístup podľa zadania. Menej vzorov by vzniklo, ak by sme hľadali len priame prechody (A → B kde A a B sú bezprostredne susedné). Pri podpostupnostiach vznikne prirodzene viac platných vzorov, lebo podmienka je voľnejšia. Sekvenčné pravidlá sú napriek tomu štatisticky stabilné (Q = 0, W = 0.69).
 
 ---
 
@@ -705,6 +790,8 @@ A: `Agg` je neinteraktívny backend matplotlibu, ktorý vykresľuje obrázky pri
 
 **Q: Čo je dátová matica vzory × kvartály a na čo slúži?**
 A: Je to binárna matica, kde každý **riadok** je jedno unikátne pravidlo (vzor) a každý **stĺpec** je jeden kvartál. Hodnota `1` znamená, že dané pravidlo bolo extrahované v danom kvartáli, `0` znamená, že nie. Táto matica je vstupom pre štatistické testy (Cochran Q, Kendall W) – umožňuje analyzovať, ako sa výskyt vzorov mení v čase naprieč všetkými 16 kvartálmi naraz.
+
+V našej analýze sú matice veľkosti: `assoc_cat` = 163 × 16, `assoc_web` = 83 × 16, `seq_cat` = 788 × 16, `seq_web` = 50 × 16.
 
 ---
 
