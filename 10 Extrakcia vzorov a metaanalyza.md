@@ -6,14 +6,40 @@
 
 ### Základný problém, ktorý skript rieši
 
-Banka zaznamenávala správanie návštevníkov svojho webu počas rokov 2009 – 2012 – teda v období finančnej krízy (2009–2010) aj po nej (2011–2012). Každý riadok v logu hovorí: _kedy_, _kto_ (relácia/frame) a _čo_ navštívil (kategória stránky / podčasť webu).
+Banka zaznamenávala správanie návštevníkov svojho webu počas rokov 2009 – 2012 – teda v období finančnej krízy (2009–2010) aj po nej (2011–2012). Každý riadok v logu hovorí: _kedy_, _kto_ (relácia identifikovaná stĺpcom `agent`) a _čo_ navštívil (kategória stránky `category` / podčasť webu `webPart`).
 
 Skript sa pýta: **Zmenilo sa správanie návštevníkov medzi krízou a post-krízou?** Odpovedá tak, že:
 
 1. Rozdelí dáta na **16 kvartálov** (09Q1 – 12Q4)
-2. Z každého kvartálu vyťaží **asociačné a sekvenčné pravidlá** (vzory)
-3. Zostaví **dátovú maticu vzory × kvartály** (0/1 – vzor bol/nebol prítomný)
-4. Testuje štatisticky, či sa vzory medzi kvartálmi líšia (**Cochran Q**) a do akej miery sú konzistentné (**Kendallovo W**)
+2. Pre asociačnú analýzu vytvorí **transakcie** (množiny stránok v relácii, poradie nezáleží)
+3. Pre sekvenčnú analýzu vytvorí **sekvencie** (zoradené stránky podľa `unixTime`, poradie záleží)
+4. Spustí **Apriori** (asociačné pravidlá) a **AprioriAll** (sekvenčné pravidlá) pre každý kvartál samostatne
+5. Zostaví **dátovú maticu vzory × kvartály** (0/1 – vzor bol/nebol prítomný)
+6. Testuje štatisticky, či sa vzory medzi kvartálmi líšia (**Cochran Q**) a do akej miery sú konzistentné (**Kendallovo W**)
+7. Vizualizuje výsledky ako **heatmapy**
+
+---
+
+### Prečo dva rôzne typy analýzy?
+
+**Asociačná analýza (Apriori):** Hľadá stránky, ktoré si ľudia prezerajú *spolu* v rámci jednej návštevy – bez ohľadu na poradie. Napríklad: "Ak niekto navštívi stránku `Reputation`, takmer vždy navštívi aj `Pillar3 related`."
+
+**Sekvenčná analýza (AprioriAll):** Hľadá vzory v *poradí* krokov. Napríklad: "Ak niekto navštívi `Reputation`, nasledujúci krok bude `Pricing List`." Poradie je tu zásadné.
+
+---
+
+### Vstup
+
+Súbor `logs5.csv` s 2 071 235 záznamami. Oddeľovač: `;`, uvodzovky: `"`.
+
+| Stĺpec | Typ | Popis |
+|---|---|---|
+| `agent` | int | ID relácie (session) – jeden používateľ, jedna návšteva |
+| `yearQuartal` | string | Kvartál vo formáte `09Q1`, `10Q3`, atď. |
+| `category` | string | Kategória stránky (napr. `Reputation`, `Pricing List`) |
+| `webPart` | string | Podčasť webu (napr. `Awards`, `Rating`, `History`) |
+| `unixTime` | int | Unix timestamp – čas kliknutia (na chronologické zoradenie) |
+| `crisis` | int | 1 = krízové obdobie (2009–2010), 0 = post-krízové (2011–2012) |
 
 ---
 
@@ -22,39 +48,19 @@ Skript sa pýta: **Zmenilo sa správanie návštevníkov medzi krízou a post-kr
 ```
 logs5.csv
     │
-    └──► logs5_analysis.py
+    └──► analyze.py
               │
-              ├── analysis_outputs/
-              │       ├── period_summary.csv
-              │       ├── period_top_rules_assoc_cat.csv
-              │       ├── period_top_rules_assoc_web.csv
-              │       ├── period_top_rules_seq_cat.csv
-              │       ├── period_top_rules_seq_web.csv
-              │       ├── pattern_matrix_binary_assoc_cat.csv   (a ďalšie 3)
-              │       ├── pattern_matrix_support_assoc_cat.csv  (a ďalšie 3)
-              │       ├── pattern_recurrence_assoc_cat.csv      (a ďalšie 3)
-              │       ├── summary.txt
-              │       └── plots/
-              │               ├── assoc_cat_binary_heatmap.png
-              │               ├── assoc_web_binary_heatmap.png
-              │               ├── seq_cat_binary_heatmap.png
-              │               ├── seq_web_binary_heatmap.png
-              │               ├── assoc_cat_recurrence.png
-              │               ├── ...
-              │               └── rule_counts_per_period.png
+              └── analysis_outputs/
+                      ├── pattern_matrix_binary_assoc_cat.csv
+                      ├── pattern_matrix_binary_assoc_web.csv
+                      ├── pattern_matrix_binary_seq_cat.csv
+                      ├── pattern_matrix_binary_seq_web.csv
+                      └── plots/
+                              ├── heatmap_assoc_cat.png
+                              ├── heatmap_assoc_web.png
+                              ├── heatmap_seq_cat.png
+                              └── heatmap_seq_web.png
 ```
-
-### Štruktúra `logs5.csv`
-
-Oddeľovač: `;`
-
-| Stĺpec | Typ | Popis |
-|---|---|---|
-| `frame` | int | ID relácie (session) – jeden používateľ, jedna návšteva |
-| `yearQuartal` | string | Kvartál vo formáte `09Q1`, `10Q3`, atď. |
-| `category` | string | Kategória stránky (napr. `Reputation`, `Pricing List`) |
-| `webPart` | string | Podčasť webu (napr. `Awards`, `Rating`, `History`) |
-| `unixTime` | int | Unix timestamp – čas kliknutia (na zoradenie v rámci relácie) |
 
 ---
 
@@ -63,155 +69,193 @@ Oddeľovač: `;`
 ```
 START
   │
-  ├─► load_dataframe()
-  │     ├─ Načíta len potrebné stĺpce (usecols)
-  │     ├─ Prevedie frame + unixTime na int64
-  │     └─ Vymaže riadky s chýbajúcimi hodnotami
+  ├─► Krok 0: pd.read_csv("logs5.csv")
+  │     └─ čistenie chýbajúcich hodnôt (dropna)
   │
-  ├─► analyze_all_periods()
-  │     └─► pre každý kvartál (09Q1 ... 12Q4):
-  │           └─► analyze_one_period()
-  │                 ├─► build_transactions_for_period()   → množiny pre Apriori
-  │                 ├─► mine_apriori_rules()              → asociačné pravidlá
-  │                 ├─► format_apriori_rules()            → čistá tabuľka
-  │                 ├─► build_sequences_for_period()      → zoradené sekvencie
-  │                 └─► mine_sequence_rules()             → sekvenčné pravidlá
+  ├─► Krok 1: rozdelenie na 16 kvartálov → quarter_data {}
   │
-  ├─► plot_all_outputs()
-  │     ├─► build_binary_matrix()  → matica 0/1
-  │     ├─► plot_binary_heatmap()  → PNG heatmapy
-  │     └─► plot_recurrence_histogram() + plot_period_rule_counts()
+  ├─► Krok 5: hlavná slučka cez 16 kvartálov
+  │     │
+  │     ├─► priprav_transakcie(subset, 'category')
+  │     │     └─ groupby(agent) → množiny stránok (poradie nezáleží)
+  │     ├─► spusti_apriori(transakcie, 'category')
+  │     │     ├─ TransactionEncoder → binárna matica True/False
+  │     │     ├─ apriori(min_support) → frekventované itemsety
+  │     │     ├─ association_rules(min_confidence, min_lift) → pravidlá
+  │     │     └─ ak < 10 pravidiel: znížiť support o 0.01 a opakovať
+  │     │
+  │     ├─► priprav_sekvencie(subset, 'category')
+  │     │     └─ groupby(agent) + sort_values(unixTime) → zoradené sekvencie
+  │     └─► spusti_apriori_all(sekvencie, 'category')
+  │           ├─ vzorkovanie (max 2000 sekvencií)
+  │           ├─ frekventované 1-prvkové vzory (je_podpostupnost + vypocitaj_support)
+  │           ├─ rozširovanie na 2,3,4-prvkové vzory
+  │           └─ generovanie pravidiel (confidence ≥ prah)
   │
-  └─► write_all_outputs()
-        ├─► build_binary_matrix() + build_support_matrix()  → CSV matice
-        ├─► cochran_q_test()       → Cochran Q
-        ├─► kendalls_w()           → Kendallovo W
-        └─► summary.txt            → report s výsledkami
+  ├─► Krok 6: zostav_maticu() → binárna matica vzory × kvartály (0/1)
+  │
+  ├─► Krok 7: cochran_q_test() + kendall_w() → štatistická analýza
+  │
+  ├─► Krok 8: vykresli_heatmapu() → PNG súbory
+  │
+  └─► Krok 9: sumarný výpis výsledkov
+END
 ```
 
 ---
 
-## Spustenie skriptu
+## Postup riešenia – krok za krokom
 
-```
-python logs5_analysis.py [--input logs5.csv] [--output-dir analysis_outputs]
-                         [--top-k 10] [--min-count 5]
-```
-
-| Parameter | Predvolená hodnota | Popis |
-|---|---|---|
-| `--input` | `logs5.csv` | Cesta k vstupnému CSV |
-| `--output-dir` | `analysis_outputs` | Priečinok pre výstupy |
-| `--top-k` | `10` | Max počet pravidiel na kvartál (top pravidlá podľa support) |
-| `--min-count` | `5` | Min počet relácií pre sekvenčné pravidlo (absolútny count, nie zlomok) |
-
-Rozdiel medzi `min_count` a `min_support`:
-- `min_support` = relatívny prah (0.05 = 5 % relácií) – používa sa v Apriori
-- `min_count` = absolútny počet relácií (5 relácií) – používa sa v sekvenčnej analýze; prepočet: `support = min_count / n_sessions`
-
----
-
-## Postup riešenia krok za krokom
-
-### Krok 1 – Načítanie a čistenie dát (`load_dataframe`)
+### Krok 0 – Načítanie dát
 
 ```python
-usecols = [frame_col, period_col, action_col_cat, action_col_web, unix_col]
+df = pd.read_csv(
+    "logs5.csv",
+    sep=";",
+    low_memory=False,
+    quotechar='"'
+)
 
-df = pd.read_csv(input_path, sep=";", usecols=usecols,
-                 dtype="string", low_memory=False)
-
-df[frame_col] = pd.to_numeric(df[frame_col], errors="coerce")
-df[unix_col]  = pd.to_numeric(df[unix_col],  errors="coerce")
-df = df.dropna(subset=[frame_col, period_col, action_col_cat,
-                        action_col_web, unix_col])
+df['unixTime'] = pd.to_numeric(df['unixTime'], errors='coerce')
+df = df.dropna(subset=['agent', 'unixTime', 'category', 'webPart', 'yearQuartal'])
 ```
 
-- `usecols` – načítame len stĺpce, ktoré naozaj potrebujeme (šetrí RAM)
-- `dtype="string"` – bezpečné čítanie; čísla prevedieme explicitne neskôr
-- `errors="coerce"` – neplatné hodnoty (text v číselnom stĺpci) sa nahradia `NaN`
-- `dropna` – vyhodíme riadky kde čokoľvek chýba
+- `sep=";"` – CSV používa bodkočiarku ako oddeľovač (nie čiarku)
+- `low_memory=False` – pandas načíta celý súbor naraz a určí typy stĺpcov správne (bez chyby pri veľkých súboroch)
+- `quotechar='"'` – polia v uvodzovkách sa správne spoja do jedného reťazca
+- `errors='coerce'` – ak je v stĺpci `unixTime` textová hodnota, prevedie sa na `NaN` namiesto pádu skriptu
+- `dropna(...)` – vyhodíme riadky, kde čokoľvek z kľúčových stĺpcov chýba
 
-**Výsledok po čistení:** ~1 957 000 riadkov (závisí od verzie CSV)
+**Výsledok:** ~2 miliónov čistých záznamov.
 
 ---
 
-### Krok 2 – Zoradenie kvartálov (`period_sort_key`)
+### Krok 1 – Rozdelenie na kvartály
 
 ```python
-def period_sort_key(period_label):
-    match = re.fullmatch(r"(\d{2,4})Q([1-4])", str(period_label).strip())
-    year    = int(match.group(1)) + 2000   # 09 → 2009
-    quarter = int(match.group(2))
-    return (year, quarter)
+QUARTERS = sorted(df['yearQuartal'].unique())
+
+quarter_data = {}
+for q in QUARTERS:
+    quarter_data[q] = df[df['yearQuartal'] == q].copy()
 ```
 
-Regex `(\d{2,4})Q([1-4])` rozloží napr. `"10Q3"` na rok `10` a kvartál `3`.
-Funkcia `sorted(..., key=period_sort_key)` zoradí 16 kvartálov chronologicky: `09Q1, 09Q2, ..., 12Q4`.
+- `df['yearQuartal'].unique()` – nájde všetky unikátne hodnoty kvartálov (`09Q1`, `09Q2`, ..., `12Q4`)
+- `sorted(...)` – zoradí ich chronologicky (reťazce sú zoraditeľné abecedne, čo tu zodpovedá aj časovej postupnosti)
+- `quarter_data[q]` – slovník kde kľúč = názov kvartálu, hodnota = príslušný subset DataFramu
+- `.copy()` – vytvoríme kópiu, aby prípadné zmeny v subsete neovplyvnili pôvodný `df`
 
-**Rozdelenie na epochy:**
+**Výsledok:** 16 subsetov (kvartálov), prvých 8 krízové (2009–2010), druhých 8 post-krízové (2011–2012).
 
-| Epocha | Kvartály | Počet |
-|---|---|---|
-| Krízové (2009 – 2010) | 09Q1, 09Q2, 09Q3, 09Q4, 10Q1, 10Q2, 10Q3, 10Q4 | 8 |
-| Post-krízové (2011 – 2012) | 11Q1, 11Q2, 11Q3, 11Q4, 12Q1, 12Q2, 12Q3, 12Q4 | 8 |
+---
+
+### Krok 2 – Príprava dát pre analýzu
+
+#### 2a – Transakcie (pre asociačnú analýzu)
+
+```python
+def priprav_transakcie(subset, stlpec):
+    transakcie = []
+    skupiny = subset.groupby('agent')[stlpec]
+    for agent_id, hodnoty in skupiny:
+        unikatne = list(set(hodnoty.dropna().astype(str).tolist()))
+        if len(unikatne) >= 1:
+            transakcie.append(unikatne)
+    return transakcie
+```
+
+**Transakcia = množina unikátnych stránok navštívených v jednej relácii.**
+
+- `groupby('agent')` – zoskupíme riadky podľa ID relácie
+- `set(...)` – z každej relácie zoberieme len **unikátne** stránky (poradie nezáleží, duplicity vyhodíme)
+
+Príklad:
+```
+Relácia 7843: Reputation, Pricing List, Reputation, Pillar3 related
+              ─→ transakcia: {Reputation, Pricing List, Pillar3 related}
+
+Relácia 7844: Pricing List, Pricing List, Pricing List
+              ─→ transakcia: {Pricing List}
+```
+
+#### 2b – Sekvencie (pre sekvenčnú analýzu)
+
+```python
+def priprav_sekvencie(subset, stlpec):
+    sekvencie = []
+    sorted_subset = subset.sort_values('unixTime')
+    skupiny = sorted_subset.groupby('agent')[stlpec]
+    for agent_id, hodnoty in skupiny:
+        sekv = hodnoty.dropna().astype(str).tolist()
+        if len(sekv) >= 2:
+            sekvencie.append(sekv)
+    return sekvencie
+```
+
+**Sekvencia = zoradený zoznam stránok v relácii (poradie = čas kliknutia).**
+
+- `sort_values('unixTime')` – zoradíme chronologicky **pred** groupby, aby sekvencie zachovali časový poriadok
+- **NEpoužívame `set()`** – zachovávame poradie aj duplicity, lebo pri sekvenčnej analýze záleží na poradí krokov
+- `len(sekv) >= 2` – sekvencia musí mať aspoň 2 kroky, inak nemá zmysel hľadať prechody
+
+Príklad:
+```
+Relácia 7843, zoradená podľa unixTime:
+  [Reputation → Pillar3 related → Pricing List]
+  prechody: Reputation→Pillar3 related, Pillar3 related→Pricing List
+```
 
 ---
 
 ### Krok 3 – Asociačná analýza (Apriori)
 
-#### 3a – Zostavenie transakcií (`build_transactions_for_period`)
+```python
+def spusti_apriori(transakcie, typ_stlpca):
+    # ...
+    te = TransactionEncoder()
+    te_pole = te.fit(transakcie).transform(transakcie)
+    df_bin = pd.DataFrame(te_pole, columns=te.columns_)
+
+    freq_mnoziny = apriori(df_bin, min_support=aktualny_sup, use_colnames=True)
+    kandidati = association_rules(freq_mnoziny, metric="confidence", min_threshold=min_conf)
+    kandidati = kandidati[kandidati['lift'] >= min_lift]
+```
+
+#### TransactionEncoder
+
+`TransactionEncoder` prevedie zoznam transakcií na binárnu maticu:
+
+```
+Transakcie:                         Binárna matica (True/False):
+[Reputation, Pricing List]          Pillar3  Pricing  Reputation
+[Pricing List, Pillar3 related]  →    F        T          T
+[Reputation]                          T        T          F
+                                       F        F          T
+```
+
+- Každý **riadok** = jedna transakcia (relácia)
+- Každý **stĺpec** = jedna unikátna položka (stránka)
+- Hodnota `True` = položka sa v transakcii nachádza
+
+#### Apriori + association_rules
+
+- `apriori(df_bin, min_support=...)` – nájde všetky frekventované itemsety (množiny stránok, ktorých support ≥ prah)
+- `association_rules(freq_mnoziny, metric="confidence", min_threshold=min_conf)` – z itemsetov vygeneruje pravidlá tvaru `A ⟹ B`
+- `rules[rules['lift'] >= min_lift]` – dodatočný filter: zachovávame len pravidlá kde A a B nie sú nezávislé
+
+#### Automatické znižovanie support-u
 
 ```python
-for frame_id, group_df in period_df.groupby(frame_col):
-    items = list(group_df[action_col].unique())   # množina stránok v relácii
-    if len(items) >= 1:
-        transactions.append(items)
+while aktualny_sup >= SPODNA_HRANICA:
+    freq_mnoziny = apriori(df_bin, min_support=aktualny_sup, ...)
+    kandidati = association_rules(...)
+    if len(kandidati) >= MIN_PRAVIDIEL:
+        pravidla = kandidati
+        break
+    aktualny_sup = round(aktualny_sup - 0.01, 2)
 ```
 
-**Transakcia = množina unikátnych stránok navštívených v jednej relácii.**
-
-Príklad:
-```
-Relácia 7843: [Reputation, Pricing List, Pillar3 related]
-Relácia 7844: [Pricing List, Pricing List, Pricing List]  →  [Pricing List]
-Relácia 7845: [We support.., Reputation, Pillar3 related]
-```
-
-Na poradí nezáleží (oproti sekvenčnej analýze).
-
-#### 3b – Apriori algoritmus (`run_apriori`)
-
-Algoritmus prechádza transakcie a hľadá **frekventované množiny položiek** (itemsety) – teda kombinácie stránok, ktoré sa spolu vyskytujú v dostatočnom počte relácií.
-
-```python
-encoder = TransactionEncoder()
-encoded_array = encoder.fit_transform(transactions)
-df_encoded = pd.DataFrame(encoded_array, columns=encoder.columns_)
-
-frequent = apriori(df_encoded, min_support=min_support, use_colnames=True)
-rules = association_rules(frequent, metric="confidence",
-                          min_threshold=min_confidence,
-                          num_itemsets=len(frequent))
-rules = rules[rules["lift"] >= min_lift]
-```
-
-- `TransactionEncoder` prevedie zoznam zoznamov na binárnu maticu (riadok = relácia, stĺpec = položka, hodnota = True/False)
-- `apriori(...)` nájde všetky frekventované itemsety (množiny, ktorých support ≥ `min_support`)
-- `association_rules(...)` z itemsetov vygeneruje pravidlá tvaru `A ⟹ B`
-
-#### 3c – Automatické znižovanie support-u (`mine_apriori_rules`)
-
-```python
-current_support = initial_support
-while current_support >= support_min:
-    rules_df = run_apriori(transactions, current_support, ...)
-    if not rules_df.empty and len(rules_df) >= min_rules_required:
-        return rules_df, current_support
-    current_support = round(current_support - support_step, 4)
-```
-
-Ak má kvartal málo transakcií a nezískami aspoň 10 pravidiel pri nastavenom `initial_support`, skript automaticky zníži support o `support_step = 0.01` a skúsi znova. Minimálna hranica je `0.01`.
+Ak sa nenájde aspoň 10 pravidiel, support sa automaticky zníži o 0.01 a algoritmus sa spustí znova. Minimálna hranica je `0.01`.
 
 **Nastavenia podľa stĺpca:**
 
@@ -220,83 +264,158 @@ Ak má kvartal málo transakcií a nezískami aspoň 10 pravidiel pri nastavenom
 | `category` | 0.05 | 0.50 | 1.0 | bez obmedzenia |
 | `webPart` | 0.10 | 0.70 | 1.0 | 3 |
 
+`webPart` má prísnejšie parametre, lebo obsahuje oveľa viac unikátnych hodnôt – bez obmedzenia by hrozila **kombinatorická explózia** (príliš veľa kandidátnych itemsetov).
+
 ---
 
 ### Krok 4 – Sekvenčná analýza (AprioriAll – vlastná implementácia)
 
-#### 4a – Zostavenie sekvencií (`build_sequences_for_period`)
+#### Pomocná funkcia: `je_podpostupnost`
 
 ```python
-sorted_df = period_df.sort_values([frame_col, unix_col])
-for frame_id, group_df in sorted_df.groupby(frame_col):
-    seq = group_df[action_col].tolist()   # ZORADENÁ sekvencia
-    if len(seq) >= 2:
-        sequences.append(seq)
+def je_podpostupnost(vzor, sekvencia):
+    idx_vzoru = 0
+    i = 0
+    while i < len(sekvencia) and idx_vzoru < len(vzor):
+        if sekvencia[i] == vzor[idx_vzoru]:
+            idx_vzoru += 1
+    return idx_vzoru == len(vzor)
 ```
 
-Na rozdiel od Apriori tu **záleží na poradí**. Stránky sú zoradené podľa `unixTime`.
+Skontroluje, či vzor `[A, C]` je podpostupnosťou sekvencie `[A, B, C, D]`.
+Prvky **nemusia byť susedné** – stačí zachovať poradie (A musí byť pred C).
 
-Príklad:
 ```
-Relácia 7843, zoradená: [Reputation, Pillar3 related, Pricing List]
-               prechody: Reputation→Pillar3 related, Pillar3 related→Pricing List
+vzor = ['A', 'C'],  sekvencia = ['A', 'B', 'C', 'D']  →  True
+vzor = ['C', 'A'],  sekvencia = ['A', 'B', 'C', 'D']  →  False  (C je až na 3. mieste)
 ```
 
-#### 4b – Výpočet sekvenčných pravidiel (`mine_sequence_rules`)
+#### Pomocná funkcia: `vypocitaj_support`
 
 ```python
-for seq in sequences:
-    seen_actions = set(seq)
-    for action in seen_actions:
-        action_count[action] += 1          # v koľkých reláciách sa A vyskytlo
-
-    seen_rules = set()
-    for i in range(len(seq) - 1):
-        seen_rules.add((seq[i], seq[i + 1]))   # unikátne prechody A→B
-    for rule in seen_rules:
-        rule_count[rule] += 1             # v koľkých reláciách bol prechod A→B
+def vypocitaj_support(vzor, sekvencie):
+    pocet_vyskytu = 0
+    i = 0
+    while i < len(sekvencie):
+        if je_podpostupnost(vzor, sekvencie[i]):
+            pocet_vyskytu += 1
+        i += 1
+    return pocet_vyskytu / len(sekvencie)
 ```
 
-- Počítame na úrovni **relácií** (nie kliknutí), aby jeden dlhý log neovplyvnil výsledok
-- `seen_rules = set()` zaručí, že každý prechod počítame v reláciu **najviac raz**
+Support vzoru = podiel sekvencií, v ktorých sa vzor vyskytuje ako podpostupnosť.
+
+#### Hlavná funkcia: `spusti_apriori_all`
+
+Algoritmus prebieha v troch fázach:
+
+**Fáza 1 – Frekventované 1-prvkové vzory:**
+```python
+while i < len(vsetky_itemy):
+    vzor = [vsetky_itemy[i]]
+    sup = vypocitaj_support(vzor, sekvencie)
+    if sup >= aktualny_sup:
+        freq_vzory[tuple(vzor)] = sup
+    i += 1
+```
+
+**Fáza 2 – Rozširovanie na dlhšie vzory (AprioriAll princíp):**
+```python
+dlzka = 2
+while dlzka <= max_dlzka:
+    # Každý predchádzajúci vzor rozšírime o každý item
+    novy_vzor = predchadzajuce[j] + [vsetky_itemy[k]]
+    sup = vypocitaj_support(novy_vzor, sekvencie)
+    if sup >= aktualny_sup:
+        nove_freq[tuple(novy_vzor)] = sup
+    dlzka += 1
+```
+
+**Fáza 3 – Generovanie sekvencných pravidiel:**
+```python
+for vzor_tuple, vzor_sup in vsetky_freq_vzory.items():
+    vzor = list(vzor_tuple)
+    if len(vzor) < 2:
+        continue
+    antecedent = vzor[:split_idx]
+    konsekvent  = vzor[split_idx:]
+    konfidencia = vzor_sup / vsetky_freq_vzory[tuple(antecedent)]
+    if konfidencia >= min_conf:
+        pravidla_list.append({...})
+```
+
+Príklad: vzor `[A, B, C]` generuje pravidlá `[A] → [B, C]` a `[A, B] → [C]`.
+
+**Optimalizácie pre veľký dataset:**
+- Vzorkujeme max **2000 sekvencií** na kvartál (pre rýchlosť)
+- Pre `webPart` používame len **top-50 najfrekventovanejších** hodnôt (zabránenie kombinatorickej explózii)
 
 ---
 
-### Krok 5 – Dátová matica vzory × kvartály (`build_binary_matrix`)
+### Krok 6 – Dátová matica vzory × kvartály
 
 ```python
-matrix = pd.DataFrame(0, index=all_patterns, columns=period_labels, dtype=int)
+def zostav_maticu(pravidla_per_quarter, quarters, typ):
+    # Krok A: zozbierame všetky unikátne vzory naprieč kvartálmi
+    vsetky_vzory = set()
+    for q in quarters:
+        for _, riadok in pravidla_per_quarter[q].iterrows():
+            ant = str(sorted(list(riadok['antecedents'])))
+            con = str(sorted(list(riadok['consequents'])))
+            vsetky_vzory.add(ant + " -> " + con)
 
-for period in period_labels:
-    for val in results[period][rule_type][col_key]:
-        matrix.loc[str(val), period] = 1
+    # Krok B: inicializujeme maticu nulami
+    matica = pd.DataFrame(0, index=sorted(vsetky_vzory), columns=quarters)
+
+    # Krok C: vyplníme 1 tam kde vzor existuje v danom kvartáli
+    for q in quarters:
+        for _, riadok in pravidla_per_quarter[q].iterrows():
+            kluc = ...
+            matica.loc[kluc, q] = 1
+
+    return matica
 ```
 
-- Riadky = unikátne pravidlá naprieč všetkými kvartálmi (napr. `"We support.. => Reputation"`)
-- Stĺpce = 16 kvartálov (`09Q1` – `12Q4`)
-- Hodnota = 1 ak pravidlo bolo nájdené v tomto kvartáli, 0 ak nie
+- **Riadky** = unikátne pravidlá naprieč všetkými kvartálmi
+- **Stĺpce** = 16 kvartálov (`09Q1` – `12Q4`)
+- **Hodnota 1** = pravidlo bolo nájdené v tomto kvartáli
+- **Hodnota 0** = pravidlo sa v tomto kvartáli nevyskytlo
 
 Príklad (skrátený):
 
 | Vzor | 09Q1 | 09Q2 | ... | 12Q4 |
 |---|---|---|---|---|
-| `We support.. => Reputation` | 1 | 1 | ... | 0 |
-| `Pricing List => Pricing List` | 1 | 1 | ... | 1 |
-| `History, Rating => Awards` | 0 | 1 | ... | 1 |
+| `['Reputation'] -> ['Pillar3 related']` | 1 | 1 | ... | 0 |
+| `['Pricing List'] -> ['Reputation']` | 1 | 0 | ... | 1 |
+| `['We support..'] -> ['Reputation']` | 0 | 1 | ... | 0 |
 
 ---
 
-### Krok 6 – Štatistické testy
+### Krok 7 – Štatistická analýza
 
 Pozri sekciu **Štatistické metódy a vzorce** nižšie.
 
 ---
 
-### Krok 7 – Vizualizácia (heatmapy + histogramy)
+### Krok 8 – Vizualizácia (heatmapy)
 
-- **Binárna heatmapa** – riadky = vzory (zoradené od najstabilnejšieho), stĺpce = kvartály, farba = prítomnosť
-- **Červená prerušovaná čiara** – hranica krízového/post-krízového obdobia (pred `11Q1`)
-- **Histogram opakovania** – os X = počet kvartálov kde sa vzor vyskytol, os Y = počet takých vzorov
+```python
+def vykresli_heatmapu(matica, nazov, cesta_suboru):
+    plt.figure(figsize=(sirka, vyska))
+    sns.heatmap(
+        matica,
+        cmap='Blues',
+        linewidths=0.3,
+        vmin=0, vmax=1
+    )
+    plt.savefig(cesta_suboru, dpi=100)
+    plt.close()
+```
+
+- **Heatmapa** vizualizuje binárnu maticu vzory × kvartály
+- Modrá = vzor prítomný (1), biela = vzor nepritomný (0)
+- `plt.close()` – zavrieme figure aby nedochádzalo k úniku pamäte pri 4 obrázkoch za sebou
+- `matplotlib.use('Agg')` – neinteraktívny backend (bez GUI okna), vhodný pre serverové/skriptové spustenie
 
 ---
 
@@ -305,34 +424,28 @@ Pozri sekciu **Štatistické metódy a vzorce** nižšie.
 ### 1. Support (podpora)
 
 $$
-\text{support}(A) = \frac{\text{počet relácií obsahujúcich } A}{\text{celkový počet relácií}}
+\text{support}(A) = \frac{\text{počet transakcií/sekvencií obsahujúcich } A}{\text{celkový počet transakcií/sekvencií}}
 $$
 
 $$
-\text{support}(A \Rightarrow B) = \text{support}(A \cup B) = \frac{|\{t \in T : A \subseteq t \wedge B \subseteq t\}|}{|T|}
+\text{support}(A \Rightarrow B) = \text{support}(A \cup B)
 $$
 
-- Hovorí, aká veľká časť relácií obsahuje daný itemset / prechod
 - Pohybuje sa v rozsahu $[0, 1]$
-- Príklad: `We support.. => Reputation`, support = 0.0749 v 09Q1 → pravidlo sa nachádza v ~7.5 % relácií
-
-**Pre sekvenčné pravidlá:**
-
-$$
-\text{support}(A \to B) = \frac{\text{počet relácií kde prechod } A \to B \text{ nastáva aspoň raz}}{|T|}
-$$
+- Hovorí, v akom podiele relácií sa daný vzor (alebo kombinácia stránok) vyskytuje
+- Príklad: support = 0.12 → vzor sa nachádza v 12 % relácií daného kvartálu
 
 ---
 
 ### 2. Confidence (spoľahlivosť)
 
 $$
-\text{confidence}(A \Rightarrow B) = \frac{\text{support}(A \cup B)}{\text{support}(A)} = \frac{|\{t : A \subseteq t \wedge B \subseteq t\}|}{|\{t : A \subseteq t\}|}
+\text{confidence}(A \Rightarrow B) = \frac{\text{support}(A \cup B)}{\text{support}(A)}
 $$
 
-- Pravdepodobnosť, že relácia obsahuje B za podmienky, že obsahuje A
+- Pravdepodobnosť, že transakcia/sekvencia obsahuje B **za podmienky, že obsahuje A**
 - Pohybuje sa v rozsahu $[0, 1]$
-- Príklad: `We support.. => Reputation`, confidence = 0.735 → ak relácia obsahuje stránku "We support..", v 73.5 % prípadov obsahuje aj "Reputation"
+- Príklad: `Reputation ⟹ Pillar3 related`, confidence = 0.73 → ak relácia obsahuje stránku „Reputation", v 73 % prípadov obsahuje aj „Pillar3 related"
 
 ---
 
@@ -342,75 +455,57 @@ $$
 \text{lift}(A \Rightarrow B) = \frac{\text{confidence}(A \Rightarrow B)}{\text{support}(B)} = \frac{\text{support}(A \cup B)}{\text{support}(A) \cdot \text{support}(B)}
 $$
 
-- Meria, o koľko je výskyt B v relácii pravdepodobnejší, ak vie že relácia obsahuje A, oproti náhodnej relácii
-- $\text{lift} = 1$ → A a B sú nezávislé
-- $\text{lift} > 1$ → pozitívna korelácia (A pomáha predpovedať B)
-- $\text{lift} < 1$ → negatívna korelácia
-- Príklad: `We support.. => Reputation`, lift = 3.02 → spolu sa vyskytujú 3× častejšie, ako by sa dalo očakávať náhodou
+- $\text{lift} = 1$ → A a B sú **nezávislé** (náhoda)
+- $\text{lift} > 1$ → **pozitívna korelácia**: výskyt A zvyšuje pravdepodobnosť B
+- $\text{lift} < 1$ → **negatívna korelácia**: výskyt A znižuje pravdepodobnosť B
+- Príklad: lift = 3.0 → stránky sa vyskytujú spolu 3× častejšie, ako by sa dalo očakávať náhodou
 
 ---
 
 ### 4. Apriori algoritmus
 
-**Kľúčová vlastnosť (Apriori princíp / monotónnosť support-u):**
+**Kľúčová vlastnosť (Apriori princíp / anti-monotonicita support-u):**
 
-> Ak itemset `{A, B}` má support < prahová hodnota, potom **každý nadset** `{A, B, C}` tiež nebude spĺňať prahovú hodnotu.
+> Ak itemset `{A, B}` má support **menší** ako prahová hodnota, potom **každý jeho nadset** `{A, B, C}` tiež nebude spĺňať prahovú hodnotu.
 
-Vďaka tomu môžeme **odstrihávať** veľké vetvy prehľadávacieho priestoru bez ich vyhodnocovania.
+Vďaka tomu môžeme **odstrihávať** celé vetvy prehľadávacieho priestoru bez ich vyhodnocovania – ak je `{A, B}` nefrekventovaný, nikdy nekontrolujeme `{A, B, C}`, `{A, B, C, D}` atď.
 
 **Postup Apriori:**
 
 ```
 1. Nájdi všetky frekventované 1-itemsety {A}, {B}, {C}, ...
 2. Z frekventovaných 1-itemsetov zostav kandidátne 2-itemsety {A,B}, {A,C}, ...
-3. Otestuj support každého kandidátneho 2-itemsetu – vyraď tie pod prahom
-4. Opakuj pre 3-itemsety, 4-itemsety, ... (kým sú frekventované itemsety)
+3. Otestuj support každého kandida – vyraď tie pod prahom
+4. Opakuj pre 3-itemsety, 4-itemsety, ... (kým existujú frekventované)
 5. Z frekventovaných itemsetov generuj pravidlá A ⟹ B kde confidence ≥ prah
 ```
 
-**Zložitosť:** Exponenciálna v najhoršom prípade, ale Apriori princíp ju dramaticky znižuje v praxi.
-
-**Vstup do skriptu:** 33 587 relácií (09Q1) s ~5–15 stránkami v každej.
+**Vstup v skripte:** transakcie = množiny stránok z každého sedenia jedného kvartálu.
 
 ---
 
 ### 5. AprioriAll – sekvenčné pravidlá (vlastná implementácia)
 
-Skript implementuje **zjednodušenú variantu** – iba pravidlá tvaru $A \to B$ (dvojice sú za sebou idúce).
+Na rozdiel od Apriori tu **záleží na poradí** prvkov. Hľadáme vzory tvaru $[A, B, C]$ kde A nastáva pred B a B pred C.
 
-```
-Pre každú reláciu (zoradenú podľa unixTime):
-    Pre každý pár po sebe idúcich stránok (A, B) v reláciu:
-        rule_count[(A, B)] += 1   (ak ešte nebol v tejto relácii)
-        action_count[A]   += 1   (ak ešte nebol v tejto relácii)
-```
+**Podpostupnosť:** Vzor $[A, C]$ je podpostupnosťou sekvencie $[A, B, C, D]$ ak každý prvok vzoru sa v sekvencii nachádza v správnom poradí (prvky nemusia byť susedné).
 
-Zavedieme skrátené značky (zodpovedajú premenným v kóde):
-- $c_{AB}$ = počet relácií kde prechod $A \to B$ nastáva
-- $c_A$ = počet relácií kde sa vyskytuje $A$
-- $c_B$ = počet relácií kde sa vyskytuje $B$
+**Výpočet support-u:**
 
 $$
-\text{support}(A \to B) = \frac{c_{AB}}{|T|}
+\text{support}([A, B]) = \frac{\text{počet sekvencií kde } [A, B] \text{ je podpostupnosťou}}{|T|}
 $$
 
-$$
-\text{confidence}(A \to B) = \frac{c_{AB}}{c_A}
-$$
+**Výpočet confidence:**
 
 $$
-\text{lift}(A \to B) = \frac{\text{confidence}(A \to B)}{c_B / |T|}
+\text{confidence}([A] \to [B]) = \frac{\text{support}([A, B])}{\text{support}([A])}
 $$
 
-**Príklad zo skutočných dát (09Q1, category):**
-
-| Pravidlo | Support | Confidence | Lift |
-|---|---|---|---|
-| `Pricing List => Pricing List` | 0.512 | 0.815 | 1.297 |
-| `Pillar3 related => Pillar3 related` | 0.206 | 0.633 | 1.951 |
-| `Reputation => Pillar3 related` | 0.140 | 0.626 | 1.928 |
-
-Pravidlo `Pricing List => Pricing List` znamená: v 81.5 % relácií kde sa vyskytla stránka Pricing List, sa tam vyskytla znova – t.j. používateľ navštívil tú istú stránku viackrát počas jednej relácie.
+Implementácia v skripte prechádza všetky sekvencie a testuje príslušnosť vzoru pomocou `je_podpostupnost`. Postup:
+1. Nájde frekventované 1-prvkové vzory
+2. Rozširuje ich na 2, 3, 4-prvkové (AprioriAll rozširovanie)
+3. Generuje pravidlá zo všetkých frekventovaných vzorov dlžky ≥ 2
 
 ---
 
@@ -418,170 +513,121 @@ Pravidlo `Pricing List => Pricing List` znamená: v 81.5 % relácií kde sa vysk
 
 **Čo testuje:** Či sa proporcia prítomnosti vzorov **štatisticky líši** medzi kvartálmi.
 
-**H₀:** Pravdepodobnosť prítomnosti vzoru je rovnaká vo všetkých kvartáloch (žiadna zmena).
+**H₀ (nulová hypotéza):** Pravdepodobnosť prítomnosti vzoru je rovnaká vo všetkých kvartáloch.
 
-**H₁:** Aspoň jeden kvartál sa líši od ostatných.
+**H₁ (alternatívna hypotéza):** Aspoň jeden kvartál sa od ostatných štatisticky líši.
 
-**Vstup:** Binárna matica $X$ rozmeru $(k \times n)$:
-- $k$ = počet kvartálov (u nás 16)
-- $n$ = počet unikátnych vzorov
+**Vstup:** Binárna matica $X$ rozmeru $(n \times k)$:
+- $n$ = počet unikátnych vzorov (riadky)
+- $k$ = počet kvartálov (stĺpce); u nás $k = 16$
 
 **Výpočet:**
 
 $$
-Q = (k - 1) \cdot \frac{k \sum_{j=1}^{k} C_j^2 - \left(\sum_{j=1}^{k} C_j\right)^2}{k \sum_{i=1}^{n} R_i - \sum_{i=1}^{n} R_i^2}
+Q = (k-1) \cdot \frac{k \displaystyle\sum_{j=1}^{k} C_j^2 - \left(\displaystyle\sum_{j=1}^{k} C_j\right)^2}{k \displaystyle\sum_{i=1}^{n} R_i - \displaystyle\sum_{i=1}^{n} R_i^2}
 $$
 
 kde:
-- $C_j$ = súčet stĺpca $j$ (počet vzorov prítomných v kvartáli $j$)
-- $R_i$ = súčet riadku $i$ (počet kvartálov kde je vzor $i$ prítomný)
-- $k$ = počet kvartálov = 16
-
-**Distribúcia:** Pod $H_0$ sa $Q$ riadi distribúciou $\chi^2$ s $k - 1 = 15$ stupňami voľnosti.
+- $C_j$ = súčet $j$-tého stĺpca (počet vzorov prítomných v $j$-tom kvartáli)
+- $R_i$ = súčet $i$-tého riadku (v koľkých kvartáloch je vzor $i$ prítomný)
+- $G = \sum C_j$ = celková suma všetkých hodnôt v matici
 
 **Kód výpočtu:**
 
 ```python
-k = x.shape[1]                         # 16 kvartálov
-row_sums = x.sum(axis=1)               # Ri pre každý vzor
-col_sums = x.sum(axis=0)               # Cj pre každý kvartál
+def cochran_q_test(matica):
+    hodnoty = matica.values.astype(float)
+    k = hodnoty.shape[1]          # počet kvartálov
 
-numerator   = k * np.sum(col_sums ** 2) - (np.sum(col_sums) ** 2)
-denominator = k * np.sum(row_sums) - np.sum(row_sums ** 2)
+    sumy_stlpcov = hodnoty.sum(axis=0)   # Cj
+    sumy_riadkov = hodnoty.sum(axis=1)   # Ri
+    G = hodnoty.sum()                    # celková suma
 
-q_stat  = (k - 1) * numerator / denominator
-p_value = chi2.sf(q_stat, k - 1)      # 1 - CDF = p-hodnota (pravý chvost)
+    citatel   = (k - 1) * (k * np.sum(sumy_stlpcov ** 2) - G ** 2)
+    menovatel = k * G - np.sum(sumy_riadkov ** 2)
+
+    Q = citatel / menovatel
+    p_hodnota = chi2.sf(Q, k - 1)       # p-hodnota: P(chi2 > Q)
+    return Q, p_hodnota
 ```
 
-`chi2.sf(x, df)` = 1 - CDF = pravdepodobnosť, že $\chi^2$ náhodná premenná nadobudne hodnotu väčšiu ako `x` (p-hodnota pre pravostranný test).
+`chi2.sf(Q, df)` = $1 - \text{CDF}$ = pravdepodobnosť, že $\chi^2$ náhodná premenná nadobudne hodnotu väčšiu ako $Q$ (pravostranný test).
 
-**Skutočné výsledky:**
+**Distribúcia:** Pod $H_0$ sa $Q$ riadi distribúciou $\chi^2$ s $k - 1 = 15$ stupňami voľnosti.
 
-| Typ analýzy | Q | p-hodnota | Záver |
-|---|---|---|---|
-| `ASSOC_CAT` | 48.66 | 0.000020 | **Zamietame H₀** – vzory sa štatisticky líšia |
-| `ASSOC_WEB` | 33.56 | 0.003922 | **Zamietame H₀** – vzory sa štatisticky líšia |
-| `SEQ_CAT` | 0.00 | 1.000000 | Nezamietame H₀ – vzory sú stabilné naprieč kvartálmi |
-| `SEQ_WEB` | 0.00 | 1.000000 | Nezamietame H₀ – vzory sú stabilné naprieč kvartálmi |
-
-Prah hladiny významnosti: $\alpha = 0.05$.
-
-**Interpretácia:** Asociačné vzory (Apriori) sa medzi kvartálmi štatisticky menia – to naznačuje, že kríza skutočne ovplyvnila, ktoré stránky si ľudia prezerajú spolu. Sekvenčné vzory (prechody medzi stránkami) sú naopak veľmi stabilné – poradie navigácie sa nezmenilo.
-
-**Prečo Q = 0 pre sekvenčné pravidlá?** Pretože sekvenčné pravidlá sa nachádzajú v každom alebo takmer každom kvartáli (high stability). Ak sú všetky $C_j$ rovnaké (každý kvartál má rovnaký počet vzorov), čitateľ Q vzorca = 0.
+**Prah hladiny významnosti:** $\alpha = 0.05$. Ak $p < 0.05$, zamietame $H_0$.
 
 ---
 
 ### 7. Kendallovo W (koeficient konkordancie)
 
-**Čo meria:** Mieru **zhody v poradovom hodnotení** vzorov medzi kvartálmi. Inými slovami: Či kvartály "súhlasia" na tom, ktoré vzory sú dôležitejšie (vyšší support) a ktoré menej.
+**Čo meria:** Mieru **zhody v poradovom hodnotení** vzorov medzi kvartálmi – teda či kvartály „súhlasia" na tom, ktoré vzory sú prítomné a ktoré nie.
 
-**Vstup:** Matica support-hodnôt $S$ rozmeru $(m \times n)$:
-- $m$ = počet vzorov (riadky) – len vzory prítomné v ≥ 2 kvartáloch
-- $n$ = počet kvartálov = 16 (hodnotitelia)
+**Vstup:** Binárna matica $X$ rozmeru $(n \times k)$.
 
 **Postup výpočtu:**
 
-**Krok 1:** Pre každý kvartál $j$ zoradíme vzory podľa support hodnôt a priradíme im **ranky** (1 = najvyšší support, $m$ = najnižší). Pri zhodách použijeme priemerný rank.
+**Krok 1:** Pre každý kvartál $j$ pridelíme každému vzoru **rank** podľa jeho hodnoty (poradie prítomnosti).
 
 $$
 r_{ij} = \text{rank vzoru } i \text{ v kvartáli } j
 $$
 
-**Krok 2:** Pre každý vzor $i$ spočítame súčet rankov naprieč všetkými kvartálmi:
+**Krok 2:** Suma rankov vzoru $i$ naprieč všetkými kvartálmi:
 
 $$
-R_i = \sum_{j=1}^{n} r_{ij}
+R_i = \sum_{j=1}^{k} r_{ij}
 $$
 
-**Krok 3:** Priemerný súčet rankov:
+**Krok 3:** Priemerná suma rankov:
 
 $$
-\bar{R} = \frac{1}{m} \sum_{i=1}^{m} R_i = \frac{n(m+1)}{2}
+\bar{R} = \frac{1}{n} \sum_{i=1}^{n} R_i
 $$
 
 **Krok 4:** Suma štvorcov odchýlok:
 
 $$
-S = \sum_{i=1}^{m} \left(R_i - \bar{R}\right)^2
+S = \sum_{i=1}^{n} \left(R_i - \bar{R}\right)^2
 $$
 
 **Krok 5:** Kendallovo W:
 
 $$
-W = \frac{12 S}{n^2 (m^3 - m)}
+W = \frac{12 \cdot S}{k^2 \cdot (n^3 - n)}
 $$
 
-- $W = 1$ → dokonalá zhoda (všetky kvartály poradie vzorov rovnako)
+- $W = 1$ → dokonalá zhoda (všetky kvartály sa zhodujú v poradí vzorov)
 - $W = 0$ → náhodné poradie (kvartály sa nezhodujú)
-- $0 < W < 1$ → čiastočná zhoda
 
 **Kód výpočtu:**
 
 ```python
-m = scores.shape[0]   # počet vzorov
-n = scores.shape[1]   # počet kvartálov (raters)
+def kendall_w(matica):
+    hodnoty = matica.values.astype(float)
+    n = hodnoty.shape[0]   # počet vzorov
+    k = hodnoty.shape[1]   # počet kvartálov
 
-ranks = np.zeros_like(scores, dtype=float)
-for j in range(n):
-    ranks[:, j] = rankdata(-scores[:, j], method="average")
-    # mínus: rankdata triedi vzostupne, my chceme rank 1 = najvyšší support
+    poradia = np.zeros_like(hodnoty)
+    j = 0
+    while j < k:
+        poradia[:, j] = rankdata(hodnoty[:, j])
+        j += 1
 
-rank_sums    = ranks.sum(axis=1)           # Ri pre každý vzor
-mean_rank    = rank_sums.mean()            # R_bar
-S            = np.sum((rank_sums - mean_rank) ** 2)
-W            = 12.0 * S / (n ** 2 * (m ** 3 - m))
+    sumy_poradii = poradia.sum(axis=1)     # Ri pre každý vzor
+    priemer_sum  = sumy_poradii.mean()     # R_bar
+    S = np.sum((sumy_poradii - priemer_sum) ** 2)
+    W = (12.0 * S) / (k ** 2 * (n ** 3 - n))
+    return W
 ```
 
-**Skutočné výsledky:**
+**Interpretácia W:**
 
-| Typ analýzy | W | `n_items` | `n_raters` | Interpretácia |
-|---|---|---|---|---|
-| `ASSOC_CAT` | 0.2929 | 18 | 16 | Slabá zhoda – asociačné vzory sa v čase menia |
-| `ASSOC_WEB` | 0.1388 | 28 | 16 | Veľmi slabá zhoda |
-| `SEQ_CAT` | 0.6925 | 14 | 16 | **Silná zhoda** – sekvenčné vzory sú konzistentné |
-| `SEQ_WEB` | 0.5074 | 18 | 16 | Stredná zhoda |
-
----
-
-## Skutočné výsledky analýzy
-
-### Prehľad kvartálov (z `period_summary.csv`)
-
-| Kvartál | Kríza? | Počet udalostí | Počet relácií |
-|---|---|---|---|
-| 09Q1 | Áno | 144 041 | 33 587 |
-| 09Q2 | Áno | 207 213 | 86 683 |
-| 10Q4 | Áno | 90 448 | 32 661 |
-| 11Q1 | Nie | 201 629 | 36 256 |
-| 12Q3 | Nie | 184 216 | 40 397 |
-| 12Q4 | Nie | 193 761 | 33 556 |
-
-V post-krízovom období (2012) sa pre kategórie `assoc_cat` podarilo nájsť len 0–8 pravidiel aj pri minimálnom support 0.01 – trh sa stabilizoval a správanie sa stalo menej predvídateľným v zmysle asociácií.
-
-### Top 5 najstabilnejších vzorov (prítomných v najväčšom počte kvartálov)
-
-**Asociačná analýza – category (ASSOC\_CAT):**
-
-| Pravidlo | Počet kvartálov z 16 |
+| Hodnota W | Interpretácia |
 |---|---|
-| `Pillar3 related, We support.. => Reputation` | 14 |
-| `Reputation, We support.. => Pillar3 related` | 14 |
-| `We support.. => Reputation` | 12 |
-| `Pillar3 disclosure requirements, Reputation => Pillar3 related` | 10 |
-| `Pillar3 disclosure requirements => Pillar3 related` | 10 |
-
-**Sekvenčná analýza – category (SEQ\_CAT):**
-
-| Pravidlo | Počet kvartálov z 16 |
-|---|---|
-| `Pillar3 disclosure requirements => Pillar3 disclosure requirements` | 16 |
-| `Pillar3 related => Pillar3 related` | 16 |
-| `Pillar3 disclosure requirements => Pillar3 related` | 16 |
-| `Pricing List => Pricing List` | 16 |
-| `Reputation => Pillar3 related` | 16 |
-
-Sekvenčné pravidlá sú oveľa stabilnejšie – `Pillar3 disclosure requirements => Pillar3 related` sa vyskytuje v každom jednom kvartáli.
+| $W > 0.7$ | Silná konkordancia – kvartály sa zhodujú v poradí vzorov |
+| $0.3 < W \leq 0.7$ | Mierna konkordancia |
+| $W \leq 0.3$ | Slabá konkordancia – poradie vzorov je nestabilné naprieč časom |
 
 ---
 
@@ -589,246 +635,94 @@ Sekvenčné pravidlá sú oveľa stabilnejšie – `Pillar3 disclosure requireme
 
 | Súbor | Obsah |
 |---|---|
-| `period_summary.csv` | Prehľad kvartálov: počet udalostí, relácií, pravidiel, použitý support |
-| `period_top_rules_assoc_cat.csv` | Všetky asociačné pravidlá pre category (všetky kvartály) s metriky |
-| `period_top_rules_assoc_web.csv` | Asociačné pravidlá pre webPart |
-| `period_top_rules_seq_cat.csv` | Sekvenčné pravidlá pre category |
-| `period_top_rules_seq_web.csv` | Sekvenčné pravidlá pre webPart |
-| `pattern_matrix_binary_*.csv` | Binárna matica vzory × kvartály (0/1) |
-| `pattern_matrix_support_*.csv` | Matica support hodnôt vzory × kvartály |
-| `pattern_recurrence_*.csv` | Koľko kvartálov obsahuje každý vzor (zoradené zostupne) |
-| `summary.txt` | Textový report: Cochran Q, Kendallovo W, top vzory |
-
----
-
-## Vysvetlenie kľúčových funkcií
-
-| Funkcia | Vstup | Výstup | Čo robí |
-|---|---|---|---|
-| `load_dataframe` | cesta k CSV | DataFrame | Načíta a vyčistí dáta |
-| `period_sort_key` | reťazec `"10Q3"` | tuple `(2010, 3)` | Chronologické triedenie kvartálov |
-| `is_crisis_period` | reťazec `"10Q3"` | `True` / `False` | Určí, či je kvartál v kríze |
-| `build_transactions_for_period` | DataFrame kvartálu | list of lists | Skupiny stránok v reláciách pre Apriori |
-| `run_apriori` | transakcie, prahy | DataFrame pravidiel | Spustí mlxtend Apriori |
-| `mine_apriori_rules` | transakcie, prahy | DataFrame + support | Apriori s automatickým znižovaním support-u |
-| `format_apriori_rules` | mlxtend výstup | čistý DataFrame | Prevedie frozenset na textové pravidlá |
-| `build_sequences_for_period` | DataFrame kvartálu | list of lists | Zoradené sekvencie akcií v reláciách |
-| `mine_sequence_rules` | sekvencie, prah | DataFrame pravidiel | Vlastná implementácia sekvenčných pravidiel |
-| `analyze_one_period` | DataFrame kvartálu | slovník výsledkov | Spustí asociačnú aj sekvenčnú analýzu |
-| `analyze_all_periods` | celý DataFrame | labels, results, summary | Analyzuje všetkých 16 kvartálov |
-| `build_binary_matrix` | výsledky, labels | DataFrame 0/1 | Vzory × kvartály binárna matica |
-| `build_support_matrix` | výsledky, labels | DataFrame float | Vzory × kvartály support matica |
-| `cochran_q_test` | binárna matica | dict {q, p, df} | Cochran Q štatistický test |
-| `kendalls_w` | support matica | dict {w, ...} | Kendallovo W (koeficient konkordancie) |
-| `plot_binary_heatmap` | binárna matica | PNG súbor | Heatmapa so zvýraznenou hranicou krízy |
-| `write_all_outputs` | všetky výsledky | CSV + TXT | Zápis všetkých výstupných súborov |
+| `pattern_matrix_binary_assoc_cat.csv` | Binárna matica vzory × kvartály pre asociačné pravidlá (category) |
+| `pattern_matrix_binary_assoc_web.csv` | Binárna matica pre asociačné pravidlá (webPart) |
+| `pattern_matrix_binary_seq_cat.csv` | Binárna matica pre sekvenčné pravidlá (category) |
+| `pattern_matrix_binary_seq_web.csv` | Binárna matica pre sekvenčné pravidlá (webPart) |
+| `plots/heatmap_assoc_cat.png` | Vizualizácia matice ako heatmapa (asociácia, category) |
+| `plots/heatmap_assoc_web.png` | Vizualizácia (asociácia, webPart) |
+| `plots/heatmap_seq_cat.png` | Vizualizácia (sekvencia, category) |
+| `plots/heatmap_seq_web.png` | Vizualizácia (sekvencia, webPart) |
 
 ---
 
 ## Otázky, ktoré môže položiť profesor
 
-**Q: Čo je jedna transakcia v kontexte asociačnej analýzy?**
-
-A: Jedna transakcia = jedna relácia (`frame`). Obsahuje **množinu unikátnych** kategórií / podčastí webu, ktoré používateľ navštívil počas jednej relácie. Na poradí nezáleží – `{A, B, C}` a `{C, A, B}` sú rovnaká transakcia.
-
----
-
-**Q: Čo je podpora (support) a prečo ho automaticky znižujeme?**
-
-A: Support = podiel relácií obsahujúcich daný itemset z celkového počtu relácií. Niektoré kvartály majú málo relácií alebo homogénne správanie – pri vysokom prahu support nenájdeme dostatok pravidiel. Skript preto automaticky znižuje prah po kroku 0.01, kým nenájde aspoň 10 pravidiel alebo nedosiahne minimum 0.01.
+**Q: Čo je transakcia v kontexte tejto analýzy a čo je sekvencia? Aký je medzi nimi rozdiel?**
+A: **Transakcia** je množina stránok navštívených v jednej relácii – poradie nezáleží (napr. `{Reputation, Pricing List}`). Používa sa v asociačnej analýze. **Sekvencia** je zoradený zoznam stránok podľa času kliknutia – poradie je zásadné (napr. `[Reputation → Pricing List → Pillar3 related]`). Používa sa v sekvenčnej analýze.
 
 ---
 
-**Q: Aký je rozdiel medzi asociačnou a sekvenčnou analýzou?**
-
-A: **Asociačná** analýza hľadá, ktoré stránky sa **spoločne vyskytujú** v reláciách, bez ohľadu na poradie (`{A, B}` = `{B, A}`). **Sekvenčná** analýza hľadá, ktoré stránky po sebe **nasledujú** – záleží na poradí: `A → B` ≠ `B → A`. V skripte je asociačná riešená cez mlxtend Apriori, sekvenčná vlastnou implementáciou počítajúcou prechody medzi po sebe idúcimi stránkami.
-
----
-
-**Q: Čo znamená lift = 3.02 pre pravidlo `We support.. => Reputation`?**
-
-A: Relácie obsahujúce stránku "We support.." obsahujú stránku "Reputation" 3.02× **častejšie**, ako by sme čakali pri náhodnom výskyte oboch stránok. Lift > 1 naznačuje pozitívnu asociáciu.
+**Q: Prečo sa pri príprave transakcií používa `set()`, ale pri sekvenciách nie?**
+A: Pri **transakciách** chceme vedieť len to, *ktoré* stránky sa v relácii nachádzali – počet opakovaní a poradie nezaujíma. `set()` automaticky odstráni duplicity. Pri **sekvenciách** nás zaujíma *poradie* krokov – ak používateľ navštívil `Reputation` dvakrát, obe výskyty zachovávame, lebo sú to reálne kroky navigácie.
 
 ---
 
-**Q: Prečo Cochran Q = 0 a p = 1.0 pre sekvenčné pravidlá?**
-
-A: Sekvenčné pravidlá sú prítomné v takmer každom kvartáli (väčšina vzorov má $R_i = 16$). Keď sú všetky stĺpcové súčty $C_j$ rovnaké, čitateľ vzorca Q = 0, teda $Q = 0$. Toto znamená, že sekvenčné vzory sú extrémne stabilné – nie je možné zamietnut $H_0$.
-
----
-
-**Q: Čo je Cochran Q test a kedy ho použijeme?**
-
-A: Cochran Q test je neparametrický test pre **porovnanie závislých binárnych vzoriek** (matched samples). Použijeme ho, keď:
-- Máme $k \geq 2$ skupín (tu: 16 kvartálov)
-- Každá "jednotka" (vzor) je testovaná vo všetkých skupinách (prítomný / neprítomný)
-- Dáta sú binárne (0/1)
-
-Je to obdoba Friedmanovho testu, ale pre binárne dáta.
-
----
-
-**Q: Čo meria Kendallovo W a ako ho interpretujeme?**
-
-A: Kendallovo W meria **konzistentnosť poradia** – do akej miery sa kvartály zhodujú na tom, ktoré vzory sú "dôležitejšie" (vyšší support). $W = 0.69$ pre sekvenčné category vzory znamená pomerne silnú zhodu – kvartály sa skoro vždy zhodujú, ktoré sekvenčné vzory dominujú. $W = 0.14$ pre asociačné webPart vzory znamená slabú zhodu – podiel vzorov sa medzi kvartálmi výrazne mení.
-
----
-
-**Q: Prečo `rankdata(-scores[:, j])` so záporným znamienkom?**
-
-A: Funkcia `rankdata` priradzuje rank 1 **najmenšej** hodnote. Chceme rank 1 pre **najvyšší** support. Záporné znamienko obracia poradie: najväčší support sa stane najmenším číslom a dostane rank 1.
+**Q: Čo je Apriori princíp a na čo slúži?**
+A: Apriori princíp hovorí, že ak itemset `{A, B}` je **nefrekventovaný** (support < prah), potom každý jeho nadset `{A, B, C}` bude tiež nefrekventovaný. To umožňuje odstrihávanie (*pruning*): keď nájdeme nefrekventovaný itemset, celú vetvu prehľadávacieho priestoru zahodíme bez testovania. Bez tohto princípu by algoritmus musel testovať exponenciálne veľa kombinácií.
 
 ---
 
 **Q: Čo je `TransactionEncoder` a prečo ho potrebujeme?**
-
-A: `TransactionEncoder` z mlxtend prevedie zoznam transakcií (list of lists s reťazcami) na **binárnu maticu** NumPy/DataFrame. Každý riadok = jedna transakcia, každý stĺpec = jedna unikátna položka, hodnota = True/False (či sa položka v transakcii nachádza). Apriori algoritmus pracuje s touto binárnou maticou.
-
----
-
-**Q: Čo je `chi2.sf(q, df)` a prečo ho používame?**
-
-A: `chi2.sf(x, df)` = Survival Function = $1 - F(x)$ kde $F$ je CDF chi-kvadrát distribúcie. Dáva **pravostranný chvost** – pravdepodobnosť, že $\chi^2$ náhodná premenná s `df` stupňami voľnosti nadobudne hodnotu väčšiu ako `x`. Toto je naša p-hodnota: ak je malá ($< 0.05$), Q štatistika je extrémna a zamietame $H_0$.
+A: `TransactionEncoder` z knižnice `mlxtend` prevedie zoznam transakcií (zoznam zoznamov reťazcov) na **binárnu maticu True/False**, kde každý riadok je transakcia a každý stĺpec je jedna unikátna položka. Algoritmus `apriori()` potrebuje na vstupe práve takúto maticu.
 
 ---
 
-**Q: Prečo je matica vzory × kvartály dôležitá?**
-
-A: Táto matica je kľúčovým výstupom zadania. Umožňuje vidieť, ktoré vzory sú **stabilné** (prítomné v mnohých kvartáloch) a ktoré sa objavujú len v určitom období (napr. len počas krízy). Je vstupom do Cochran Q testu aj Kendallovho W.
-
----
-
-**Q: Prečo `dropna` a `errors="coerce"` pri načítaní?**
-
-A: `errors="coerce"` pri `pd.to_numeric` nahrádza nečíselné hodnoty za `NaN` namiesto výnimky. `dropna` následne vyhodí tieto riadky. Zaručuje, že skript nezlyhá na špinavých dátach (napr. text v stĺpci `unixTime`).
+**Q: Prečo má `webPart` prísnejšie parametre ako `category`?**
+A: `webPart` obsahuje oveľa viac unikátnych hodnôt ako `category`. Pri nízkom support-e a veľkom počte unikátnych položiek by Apriori generoval obrovské množstvo kandidátnych itemsetov – **kombinatorická explózia**. Prísnejšie parametre (`min_support=0.10`, `max_len=3`) výrazne obmedzia priestor hľadania na prakticky zvládnuteľnú veľkosť.
 
 ---
 
-**Q: Prečo sa používa `set()` pri počítaní `seen_rules` v sekvenčnej analýze?**
-
-A: Aby sme v každej relácii počítali každý prechod $A \to B$ **najviac raz**. Bez toho by dlhá relácia s mnohými opakovaním stránky A a B umelé zvyšovala count pravidla, čo by skresľovalo support na úrovni relácií.
-
----
-
-**Q: Čo je `frozenset` a prečo ho používa mlxtend?**
-
-A: `frozenset` je nemeniteľná (immutable) množina v Pythone. mlxtend uchováva antecedenty a konsekvent každého pravidla ako `frozenset`, pretože množina `{A, B}` musí byť hashable – aby mohla byť kľúčom v slovníku a mohla sa porovnávať nezávisle od poradia. Funkcia `format_apriori_rules` konvertuje `frozenset` na čitateľný text: `", ".join(sorted(...))`.
+**Q: Prečo skript znižuje support automaticky a aká je dolná hranica?**
+A: Cieľom je mať aspoň 10 pravidiel pre každý kvartál (ako požaduje zadanie). Niektoré kvartály môžu mať menej transakcií alebo menej rozmanité správanie – pri nastavenej počiatočnej hodnote support-u sa nemusí nájsť dostatok pravidiel. Automatické znižovanie o 0.01 zaručí, že sa nájde aspoň minimálny počet pravidiel. Dolná hranica 0.01 zabraňuje, aby sa pravidlá generovali z príliš zriedkavých vzorov (zároveň by to bolo výpočtovo náročné).
 
 ---
 
-**Q: Čo sa stane, ak ani pri `min_support = 0.01` nenájdeme 10 pravidiel?**
-
-A: Skript vráti pravidlá, ktoré sa pri `0.01` našli (aj keď ich je menej ako 10) a pokračuje ďalej. V praxi sa to stalo pre kvartály 12Q3 a 12Q4 (category) – tam sú 0 asociačných pravidiel, čo samo osebe je zaujímavý výsledok: správanie návštevníkov bolo v tomto období buď veľmi homogénne alebo veľmi rôznorodé.
-
----
-
-**Q: Čo znamená `axis=0` a `axis=1` v kontexte tohto skriptu?**
-
-A:
-```
-Binárna matica (vzory × kvartály):
-
-             09Q1  09Q2  09Q3  ...  12Q4
-Vzor A         1     1     0  ...     0
-Vzor B         0     1     1  ...     1
-Vzor C         1     1     1  ...     1
-
-.sum(axis=0) → sumuj po stĺpcoch (cez vzory)
-              → [2, 3, 2, ..., 2]  = koľko vzorov v každom kvartáli
-
-.sum(axis=1) → sumuj po riadkoch (cez kvartály)
-              → [2, 3, 3]  = v koľkých kvartáloch je každý vzor
-```
-
-V `cochran_q_test`: `col_sums = x.sum(axis=0)` = $C_j$ (stĺpcové súčty), `row_sums = x.sum(axis=1)` = $R_i$ (riadkové súčty).
+**Q: Čo je podpostupnosť (`je_podpostupnost`) a ako sa líši od podreťazca?**
+A: **Podpostupnosť** vyžaduje len zachovanie poradia prvkov – prvky nemusia byť susedné. Vzor `[A, C]` je podpostupnosťou `[A, B, C]` (A je pred C, hoci medzi nimi je B). **Podreťazec** by vyžadoval, aby prvky boli bezprostredne za sebou – `[A, C]` by podreťazcom `[A, B, C]` nebol. Sekvenčná analýza správania používa podpostupnosti, lebo medzi dvoma kliknutiami môže byť ľubovoľný počet iných kliknutí.
 
 ---
 
-**Q: Čo je `groupby` a ako funguje v tomto skripte?**
-
-A: `df.groupby(frame_col)` rozdelí DataFrame na skupiny podľa ID relácie. Pre každú skupinu (reláciu) dostaneme pod-DataFrame so všetkými kliknutiami tejto relácie. Je to ekvivalent SQL `GROUP BY frame`. V skripte sa používa dvakrát: raz na zostavenie transakcií (množiny stránok) a raz na zostavenie sekvencií (zoradené polia stránok).
-
----
-
-**Q: Prečo `format_apriori_rules` triedi pravidlá podľa `support DESC, confidence DESC, lift DESC`?**
-
-A: Chceme na výstupe vidieť **najrelevantnejšie** pravidlá. Primárne triedenie podľa support zaručí, že pravidlá platné pre veľkú časť relácií sú hore. Sekundárne podľa confidence = pravidlá s vysokou presnosťou. Terciárne podľa lift = pravidlá s najsilnejšou asociáciou. Funkcia `.head(top_k)` potom vezme len prvých 10.
+**Q: Čo znamená výsledok Cochran Q testu pri $p < 0.05$?**
+A: Zamietame nulovú hypotézu, že proporcia prítomnosti vzoru je rovnaká vo všetkých kvartáloch. Znamená to, že vzory správania sa **štatisticky významne menia** naprieč kvartálmi – napríklad v krízovom období sa objavujú iné vzory ako v post-krízovom. Ak $p \geq 0.05$, nemáme dostatok dôkazov na zamietnutie stability.
 
 ---
 
-**Q: Čo je Friedmanov test a ako súvisí s Cochran Q?**
-
-A: Friedmanov test je neparametrický ekvivalent repeated-measures ANOVA pre ordinálne (poradové) dáta. Cochran Q test je jeho špeciálny prípad pre **binárne** dáta (0/1). Oba testujú, či sa závislé skupiny (kvartály) štatisticky líšia. Cochran Q predpokladá: binárne merania, závislé vzorky (rovnaký vzor meraný vo všetkých kvartáloch), náhodný výber.
-
----
-
-**Q: Čo je `chi2` distribúcia a prečo ju používame tu?**
-
-A: Chi-kvadrát distribúcia $\chi^2(df)$ je distribúcia súčtu štvorcov $df$ nezávislých štandardných normálnych náhodných premenných. Cochran Q štatistika **asymptoticky** sleduje $\chi^2(k-1)$ distribúciu pre veľké vzorky. U nás $k-1 = 15$ stupňov voľnosti. Čím väčšie $Q$, tým ďalej sme v chvoste distribúcie → menšia p-hodnota → silnejší dôkaz proti $H_0$.
+**Q: Čo meria Kendallovo W a čo znamená hodnota blízka 1 vs. blízka 0?**
+A: Kendallovo W meria mieru **zhody medzi kvartálmi v poradovom hodnotení** vzorov. $W = 1$ znamená, že všetky kvartály sa zhodujú na tom, ktoré vzory sú dôležitejšie (vyšší výskyt) a ktoré menej – navigačné návyky sú konzistentné. $W = 0$ znamená, že poradie vzorov sa medzi kvartálmi úplne líši – správanie je nestabilné. Hodnota napr. $W = 0.29$ (slabá konkordancia) naznačuje, že asociačné vzory sa medzi krízou a post-krízou výrazne zmenili.
 
 ---
 
-**Q: Aká je interpretácia pravidla `Pricing List => Pricing List` v sekvenčnej analýze?**
-
-A: Toto nie je chyba – znamená to, že v rámci jednej relácie používateľ navštívil stránku `Pricing List` **viackrát** po sebe (alebo sa k nej vrátil). Je to legitímna sekvencia: stránka $A$ → tá istá stránka $A$. Support = 0.512 v 09Q1 hovorí, že viac ako polovica relácií obsahujúcich `Pricing List` ju navštívila viackrát. Používatelia si cenník prezerali opakovane – pravdepodobne porovnávali produkty.
-
----
+**Q: Prečo sa vzorkuje maximálne 2000 sekvencií pri sekvenčnej analýze?**
+A: Vlastná implementácia `apriori_all` prechádza pre každý kandidátny vzor všetky sekvencie (`O(n)` na vzor). Kvartál môže mať desiatky tisíc sekvencií a stovky kandidátnych vzorov – bez obmedzenenia by trvala analýza hodiny. Vzorkovaním 2000 sekvencií zachovávame štatistickú reprezentatívnosť (veľká vzorka) pri rozumnej rýchlosti výpočtu.
 
 ---
 
-## Doménový kontext – čo znamenajú kategórie
-
-Logy pochádzajú z webu **banky** počas finančnej krízy. Kategórie stránok odhaľujú, čo návštevníci hľadali:
-
-| Kategória / webPart | Pravdepodobný obsah |
-|---|---|
-| `Pillar3 related` | Regulačné zverejnenia podľa Basel III – Pillar 3 (povinné reporty o riziku) |
-| `Pillar3 disclosure requirements` | Špecifické požiadavky na zverejnenie podľa regulácie |
-| `Pillar3 Q-terly Info` | Kvartálne regulačné informácie |
-| `Reputation` | Sekcia o reputácii / imidži banky |
-| `We support..` | CSR sekcia (Corporate Social Responsibility) |
-| `Pricing List` | Cenník produktov banky |
-| `Awards` | Ocenenia a certifikáty |
-| `Rating` | Kreditný rating banky |
-| `History` | História banky |
-
-**Prečo dominuje Pillar3?** Počas finančnej krízy (2008–2010) regulátori výrazne sprísnili požiadavky na transparentnosť bánk. Investori a analytici intenzívne sledovali regulačné zverejnenia – odtiaľ vysoká stabilita `Pillar3` vzorcov naprieč všetkými 16 kvartálmi.
+**Q: Prečo `matplotlib.use('Agg')` na začiatku skriptu?**
+A: `Agg` je neinteraktívny backend matplotlibu, ktorý vykresľuje obrázky priamo do súborov **bez otvárania GUI okna**. Bez neho by na niektorých systémoch (server, spustenie cez terminál bez grafického prostredia) matplotlib zahlásil chybu, pretože by sa pokúsil otvoriť okno kde nie je dostupný display.
 
 ---
 
-## Interpretácia výstupných grafov
-
-### `assoc_cat_binary_heatmap.png` (a obdobné pre web/seq)
-
-```
-Tmavá bunka = vzor prítomný v tomto kvartáli
-Svetlá bunka = vzor neprítomný
-Červená čiara = hranica krízové/post-krízové obdobie
-Riadky zoradené: najstabilnejšie vzory sú hore
-```
-
-Ak vidíme tmavé bunky **len vľavo** od červenej čiary → vzor sa vyskytoval len počas krízy.
-Ak sú tmavé bunky **všade** → vzor je stabilný (napr. sekvenčné pravidlá).
-Ak sú tmavé bunky **len vpravo** → vzor sa objavil až po kríze.
-
-### `rule_counts_per_period.png`
-
-Zobrazuje, koľko pravidiel sa podarilo nájsť v každom kvartáli pre každý typ analýzy.
-- Pokles v 2012 pre `assoc_cat` a `assoc_web` (12Q3, 12Q4 = 0–2 pravidlá) = indikátor zmeny správania
-- Sekvenčné pravidlá zostávajú konštantné = stabilná navigácia
-
-### `assoc_cat_recurrence.png` (histogram)
-
-Os X = koľko kvartálov obsahuje daný vzor (1 až 16).
-Os Y = počet vzorov s danou hodnotou.
-Vzory s hodnotou 16 = "evergreen" pravidlá – prítomné vždy.
+**Q: Čo je dátová matica vzory × kvartály a na čo slúži?**
+A: Je to binárna matica, kde každý **riadok** je jedno unikátne pravidlo (vzor) a každý **stĺpec** je jeden kvartál. Hodnota `1` znamená, že dané pravidlo bolo extrahované v danom kvartáli, `0` znamená, že nie. Táto matica je vstupom pre štatistické testy (Cochran Q, Kendall W) – umožňuje analyzovať, ako sa výskyt vzorov mení v čase naprieč všetkými 16 kvartálmi naraz.
 
 ---
 
-## Zhrnutie celkového výsledku
+## Zhrnutie najdôležitejších funkcií
 
-Skript ukázal, že:
-
-1. **Asociačné vzory sa medzi krízou a post-krízou štatisticky menili** (Cochran Q p < 0.05) – ľudia menili, ktoré stránky prehliadali spolu (napr. v neskorej kríze a post-kríze menej asociácií pre webPart, len 0–2 pravidlá v 12Q3/12Q4)
-2. **Sekvenčné vzory boli veľmi stabilné** (Cochran Q = 0, Kendallovo W ≈ 0.51–0.69) – spôsob navigácie (poradie kliknutí) sa nezmenil napriek kríze
-3. **Najstabilnejšie vzory** naznačujú, že stránky súvisiace s `Pillar3` (regulačné požiadavky bánk) a `Pricing List` boli navštevované konzistentne po celých 4 rokoch
+| Funkcia / operácia | Modul | Účel |
+|---|---|---|
+| `pd.read_csv(sep=";")` | `pandas` | Načítanie CSV s bodkočiarkovým oddeľovačom |
+| `df.dropna(subset=[...])` | `pandas` | Vyhodenie riadkov s chýbajúcimi hodnotami |
+| `df.groupby('agent')` | `pandas` | Zoskupenie záznamov podľa ID relácie |
+| `sort_values('unixTime')` | `pandas` | Chronologické zoradenie pre sekvencie |
+| `TransactionEncoder()` | `mlxtend` | Kódovanie transakcií do binárnej matice True/False |
+| `apriori(df, min_support)` | `mlxtend` | Extrakcia frekventovaných itemsetov |
+| `association_rules(freq, metric="confidence")` | `mlxtend` | Generovanie asociačných pravidiel |
+| `je_podpostupnost(vzor, sekv)` | vlastná impl. | Test či vzor je podpostupnosťou sekvencie |
+| `vypocitaj_support(vzor, sekv)` | vlastná impl. | Výpočet support-u vzoru naprieč sekvenciami |
+| `chi2.sf(Q, df)` | `scipy.stats` | p-hodnota Cochran Q testu (pravý chvost chi²) |
+| `rankdata(stlpec)` | `scipy.stats` | Pridelenie rankov hodnotám (pri zhodách priemerný rank) |
+| `sns.heatmap(matica)` | `seaborn` | Vizualizácia matice ako heatmapa |
+| `pd.DataFrame(0, index=..., columns=...)` | `pandas` | Vytvorenie matice naplnenej nulami |
+| `matica.loc[kluc, q] = 1` | `pandas` | Label-based zápis do bunky matice |
