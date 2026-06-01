@@ -201,12 +201,13 @@ Tieto dve nové premenné (`hour`, `dayofweek`) sú **odvodené IV** – nevysky
 
 ```python
 df = df[df["urlExt"] == ".html"].copy()
+df = df[df["internal"] != "1"].copy()
 ```
 
-- `df["urlExt"] == ".html"` – booleovská maska: `True` pre riadky s HTML príponou
-- `.copy()` – zabráni varovaniu `SettingWithCopyWarning` (nový samostatný DataFrame)
+- `urlExt == ".html"` – len HTML stránky (hlavný obsah webu, nie PDF, ZIP...)
+- `internal != "1"` – len externá prevádzka (skutoční používatelia banky)
 
-**Prečo filtrovať na HTML?** Analýza sa zameriava na obsah webstránok. PDF súbory, ZIP archívy a iné typy majú iný charakter – ich zahrnutie by skreslilo distribúciu `category` a štatistické testy. Vyčistená vzorka obsahuje výlučne HTML stránky.
+**Prečo filtrovať internú prevádzku?** Interní/automatizovaní používatelia (batch procesy, monitorovacie skripty) bežia pravidelne v noci a spôsobujú umelý peak v nočných hodinách (napr. 4:00). Tieto záznamy nemajú nič spoločné so správaním reálnych používateľov a skreslujú **všetky** štatistiky – Spearman, Chi-square, Kruskal-Wallis aj heatmapy. Filter sa aplikuje v `load_data()` a platí globálne pre celú analýzu.
 
 ---
 
@@ -729,8 +730,8 @@ A: **DV** (závislé/vysvetľované premenné) sú `category`, `webPart`, `urlEx
 
 ---
 
-**Q: Prečo skript filtruje len HTML stránky?**
-A: Analýza sa zameriava na obsah webstránok charakterizovaný premennými `category` a `webPart`, ktoré sú odvodené z URL HTML stránok. Zahrnutie PDF, ZIP a iných typov by skreslilo distribúciu týchto kategoriálnych premenných, pretože majú iný charakter prístupu. Vyčistená vzorka = len `urlExt == ".html"`.
+**Q: Prečo skript filtruje HTML stránky aj internú prevádzku?**
+A: Dva samostatné dôvody. (1) Filter `urlExt == ".html"` ponechá len hlavný obsah webu – PDF, ZIP a iné typy majú iný charakter a skresľujú distribúciu `category`. (2) Filter `internal != "1"` odstráni internú automatizovanú prevádzku (batch procesy, monitoring), ktorá beží v noci a spôsobuje umelý peak v nočných hodinách. Bez tohto filtra by heatmapa ukazovala maximum o 4:00 ráno namiesto skutočných pracovných hodín 8–17. Oba filtre sú v `load_data()` a platia pre **celú** analýzu – všetky štatistiky aj grafy.
 
 ---
 
