@@ -1,856 +1,678 @@
-# Analýza webových logov banky – `analyze_logs5.py`
+# Analýza webových logov banky – analyze.py
 
 ---
 
-## Čo skript robí
+## Čo skript robí (podrobne)
 
-Skript číta veľký CSV súbor s logmi prístupov na web komerčnej banky a vykonáva štyri kroky:
+### Základný problém, ktorý skript rieši
 
-1. **Načíta a agreguje dáta** po chunckoch (nečíta celý súbor naraz – šetrí pamäť)
-2. **Zostaví tabuľky** (DataFrame) z nazbieraných počítadiel
-3. **Spustí tri štatistické testy** a uloží výsledky do `statistics.txt`
-4. **Vykreslí prehľadový graf** `overview.png` so všetkými analýzami
+Komerčná banka zaznamenáva každý prístup používateľov na svoju webstránku do logovacieho súboru. Každý záznam (riadok) v `logs5.csv` zodpovedá jednému prístupu a obsahuje informácie o tom:
+- **KTO** pristúpil (`anonIP` – anonymizovaná IP adresa)
+- **KEDY** pristúpil (`unixTime`, `year`, `quartal`, `week`, ...)
+- **NA ČO** pristúpil (`category`, `webPart`, `urlExt` – odvodené z URL)
+- **AKO DLHO** – (`length` – dĺžka obsahu/čas strávený)
+- **ODKIAĽ** – (`internal` – či šlo o interný prístup)
+- **V AKEJ SITUÁCII** – (`crisis` – krízové vs. normálne obdobie)
 
-### Tok dát – diagram
-
-```
-logs5.csv
-    │
-    ▼  pd.read_csv(chunksize=N)  → iterácia po chunckoch
-    │
-    ▼  normalize_text_columns()  → zjednotenie textu (UNKNOWN pre prázdne)
-    │
-    ├──► _process_unique_values()       → sety unikátnych IP, agentov
-    ├──► _process_count_analyses()      → Counter pre každý stĺpec (category, webPart...)
-    ├──► _process_weekly_visits()       → Counter: dátum týždňa → počet návštev
-    ├──► _process_chi2_counts()         → Counter: (crisis, category) → počet
-    ├──► _process_length_sample()       → slovník: category → vzorky hodnôt length
-    └──► _process_custom_analysis()     → vlastné agregácie (priemery, filtre)
-    │
-    ▼  build_tables()            → Counter/slovníky → DataFrame tabuľky
-    │
-    ▼  compute_statistics()      → Spearman + Chi-kvadrát + Kruskal-Wallis
-    │
-    ▼  save_statistics()         → statistics.txt
-    │
-    ▼  make_overview_plot()      → overview.png
-```
+Skript tieto dáta načíta, vypočíta štatistiky a uloží výsledky (textový report + grafy).
 
 ---
 
-## Vstupné a výstupné súbory
+### Otázka, ktorú skript zodpovedá
+
+> Existuje štatisticky významná závislosť medzi **časom prístupu (IV)** a **navštíveným obsahom (DV)**?
+
+Konkrétne sa testujú tri rôzne vzťahy pomocou troch rôznych štatistických metód.
+
+---
+
+### Vstup
+
+Jeden CSV súbor `logs5.csv` so stredníkovým oddeľovačom (`;`).
+
+Skript číta len 12 stĺpcov z celého súboru (ostatné ignoruje – efektívnosť):
+
+| Stĺpec | Typ | Skupina | Popis |
+|---|---|---|---|
+| `anonIP` | text | – | Anonymizovaná IP adresa používateľa |
+| `unixTime` | číslo | IV | Unix timestamp prístupu (sekundy od 1.1.1970) |
+| `year` | číslo | IV | Rok prístupu |
+| `quartal` | číslo | IV | Štvrťrok (1–4) |
+| `yearQuartal` | text | IV | Rok+štvrťrok (napr. "2021Q1") |
+| `week` | číslo | IV | Číslo týždňa v roku (1–53) |
+| `category` | text | **DV** | Kategória navštíveného obsahu (z URL) |
+| `webPart` | text | **DV** | Časť webu (z URL) |
+| `urlExt` | text | **DV** | Prípona URL (z URL) |
+| `length` | číslo | – | Dĺžka obsahu / čas strávený |
+| `internal` | text | – | Interný vs. externý prístup |
+| `crisis` | text | IV | Krízové vs. normálne obdobie |
+
+---
+
+### Výstup
 
 ```
-logs5.csv
-    └──► analyze_logs5.py ──► analysis_output/
-                                  ├── overview.png
-                                  └── statistics.txt
+logs5.csv  ──►  analyze.py  ──►  analysis_output_simple/
+                                     ├── report.txt
+                                     ├── visits_by_yearquartal.png
+                                     ├── heatmap_day_hour.png
+                                     ├── heatmap_week_year.png
+                                     └── top_category.png
 ```
 
-### Vstup: `logs5.csv`
-
-Oddeľovač: `;`, uvodzovky: `"`. Skript načíta len tieto stĺpce (ostatné ignoruje):
-
-| Stĺpec | Obsah |
+| Súbor | Obsah |
 |---|---|
-| `anonIP` | Anonymizovaná IP adresa |
-| `agent` | Identifikátor agenta |
-| `ipPart` | Časť IP adresy |
-| `userAgent` | User-agent reťazec prehliadača |
-| `unixTime` | Čas prístupu ako Unix timestamp |
-| `yearQuartal` | Rok a kvartál (napr. 2020Q1) |
-| `week` | Číslo týždňa |
-| `webPart` | Časť webu |
-| `category` | Kategória obsahu stránky |
-| `urlExt` | Prípona URL |
-| `length` | Čas strávený na stránke (sekundy) |
-| `internal` | Interný / externý prístup |
-| `crisis` | 1 = krízové obdobie, 0 = bežné |
-
-### Výstup: `analysis_output/statistics.txt`
-
-```
-1. Trend navstevnosti: poradie tyzdna vs. pocet navstev
-   Metoda: Spearmanova korelacia
-   r = 0.1090
-   p = 1.1633e-01
-   Zaver: Korelacia nie je statisticky vyznamna (p >= 0.05)
-
-2. Zavislost obsahu webu od obdobia: crisis vs. category
-   Metoda: Chi-kvadrat test + Cramerov V
-   chi2 = 225219.72,  df = 5
-   p    = 0.0000e+00
-   Cramerov V = 0.3298
-   Zaver: Statisticky vyznamna zavislost (p < 0.05)
-   Sila: stredna (V >= 0.3)
-
-3. Rozdiel dlzky navstevy medzi kategoriami obsahu
-   Metoda: Kruskal-Wallis test
-   H = 491.58
-   p = 5.2436e-104
-   Zaver: Statisticky vyznamne rozdiely medzi kategoriami (p < 0.05)
-```
-
-### Výstup: `analysis_output/overview.png`
-
-Graf s viacerými panelmi:
-- Panel 1: trend návštevnosti po týždňoch (čiara)
-- Panel 2: top kategórie podľa počtu návštev (barh)
-- Ďalšie panely: vlastné analýzy (priemerný čas na stránke, populárne kategórie počas krízy...)
-- Posledný panel: výsledky štatistických testov
+| `report.txt` | Textový report: profil dát, top hodnoty DV, výsledky 3 štat. testov |
+| `visits_by_yearquartal.png` | Čiarový graf návštevnosti po štvrťrokoch (IV → DV trend) |
+| `heatmap_day_hour.png` | Heatmapa: aktivita podľa dňa v týždni × hodiny dňa |
+| `heatmap_week_year.png` | Heatmapa: aktivita podľa týždňa × roka |
+| `top_category.png` | Horizontálny stĺpcový graf top kategórií obsahu |
 
 ---
 
 ## Postup riešenia – krok za krokom
 
-### 1. Spustenie a argumenty
+### 1. Importy a konštanty
 
 ```python
-parser = argparse.ArgumentParser(...)
-parser.add_argument("--input",     default=Path("logs5.csv"))
-parser.add_argument("--outdir",    default=Path("analysis_output"))
-parser.add_argument("--chunksize", default=5_000_000, type=int)
-args = parser.parse_args()
-```
+import argparse
+import logging
+from pathlib import Path
 
-Skript sa spúšťa z terminálu:
+import numpy as np
+import pandas as pd
 
-```
-python analyze_logs5.py --input logs5.csv --outdir analysis_output
-```
-
-`argparse` automaticky spracuje argumenty z príkazového riadka.
-
----
-
-### 2. Načítanie CSV po chunkoch – `process_csv()`
-
-Celý súbor sa nikdy nečíta do pamäte naraz. Namiesto toho `pd.read_csv()` vráti **iterátor**, ktorý pri každom prechode cyklu načíta `chunksize` riadkov:
-
-```python
-reader = pd.read_csv(
-    input_path,
-    sep=";",
-    quotechar='"',
-    usecols=USECOLS,       # nacitame len potrebne stlpce
-    chunksize=chunksize,   # velkost jedneho chunku
-    low_memory=True,
-)
-
-for chunk in reader:      # kazdy chunk je DataFrame
-    chunk = normalize_text_columns(chunk, text_columns)
-    _process_unique_values(chunk, ...)
-    _process_count_analyses(chunk, ...)
-    ...
-```
-
-Výhodou je, že pri súbore s miliónmi riadkov nestačí zhruba jeden chunk v pamäti, nie celý súbor.
-
----
-
-### 3. Normalizácia textu – `normalize_text_columns()`
-
-Pred každou analýzou sa textové stĺpce "upracú":
-
-```python
-def normalize_text_series(series, default="UNKNOWN"):
-    return series.astype("string").fillna(default).replace({"": default, "-": default})
-```
-
-- `astype("string")` – prevedie stĺpec na textový typ
-- `fillna(default)` – prázdne hodnoty (NaN) → `"UNKNOWN"`
-- `replace({...})` – prázdny reťazec alebo pomlčka → `"UNKNOWN"`
-
-**Prečo je to dôležité?** Bez normalizácie by ta istá hodnota existovala vo viacerých podobách (`""`, `"-"`, `NaN`), čo by pokazilo agregácie.
-
----
-
-### 4. Zber unikátnych identifikátorov – `_process_unique_values()`
-
-```python
-def _process_unique_values(chunk, unique_ips, unique_agents, ...):
-    unique_ips.update(chunk["anonIP"].tolist())
-    unique_agents.update(chunk["agent"].tolist())
-    ...
-```
-
-Namiesto zoznamu sa používa **set (množina)**, pretože:
-- automaticky ignoruje duplikáty
-- `set.update()` je rýchlejšie než kontrolovanie každej hodnoty osobitne
-- Na konci `len(unique_ips)` dá presný počet unikátnych IP
-
----
-
-### 5. Počítanie výskytov – `_process_count_analyses()`
-
-```python
-for analysis in COUNT_ANALYSES:
-    if analysis.get("kind") != "column":
-        continue
-    column = analysis["column"]
-    count_counters[analysis["table_key"]].update(chunk[column].tolist())
-```
-
-`Counter.update()` prijme zoznam hodnôt a automaticky inkrementuje počítadlá. Napríklad pre stĺpec `category` dostaneme niečo ako `Counter({"news": 150000, "finance": 89000, ...})`.
-
----
-
-### 6. Týždenné návštevy – `_process_weekly_visits()`
-
-```python
-unix_time   = pd.to_numeric(chunk["unixTime"], errors="coerce")
-timestamp   = pd.to_datetime(unix_time, unit="s", errors="coerce", utc=True)
-week_start  = build_week_start(timestamp)
-
-weekly_counts = week_start.value_counts(dropna=True)
-for week_value, count in weekly_counts.items():
-    visits_by_week[str(week_value.date())] += int(count)
-```
-
-**`build_week_start()`** prevedie každý timestamp na **dátum pondelka toho týždňa**:
-
-```python
-def build_week_start(timestamp_series):
-    timestamp_naive = timestamp_series.dt.tz_localize(None)
-    return timestamp_naive.dt.to_period("W").dt.start_time
-```
-
-- `tz_localize(None)` – odstráni timezone, aby `to_period` fungoval
-- `to_period("W")` – zaradí každý timestamp do týždenného "bucketu"
-- `dt.start_time` – vráti dátum začiatku toho týždňa (pondelok)
-
-Výsledok: slovník `{ "2020-01-06": 12500, "2020-01-13": 13200, ... }`.
-
----
-
-### 7. Zber dát pre štatistické testy
-
-#### Kontingencia pre chi-kvadrát – `_process_chi2_counts()`
-
-```python
-counts = chunk.groupby(["crisis", "category"]).size()
-for (crisis_val, cat_val), count in counts.items():
-    chi2_counter[(str(crisis_val), str(cat_val))] += int(count)
-```
-
-`groupby().size()` spočíta počet riadkov pre každú kombináciu hodnôt `crisis` a `category`. Napríklad: `("1", "news") → 45000`.
-
-#### Vzorky dĺžky návštevy pre Kruskal-Wallis – `_process_length_sample()`
-
-```python
-for cat_val, group in valid_frame.groupby("category"):
-    current_count = len(length_sample_by_category[cat_val])
-    if current_count >= MAX_SAMPLE_PER_CATEGORY:   # limit = 5000
-        continue
-    values = group["length"].to_numpy(dtype=float)
-    space  = MAX_SAMPLE_PER_CATEGORY - current_count
-    length_sample_by_category[cat_val].extend(values[:space].tolist())
-```
-
-Pre každú kategóriu sa zbierajú maximálne 5 000 hodnôt `length`. Limit chráni pred nadmernou spotrebou pamäte pri miliónoch riadkov.
-
----
-
-### 8. Zostavenie tabuliek – `build_tables()`
-
-Z interných počítadiel (Counter, defaultdict) sa vytvoria DataFrame tabuľky, ktoré idú do grafov aj štatistík:
-
-```python
-# Priklad: weekly_df
-weekly_df = counter_to_dataframe(results["visits_by_week"], ["week_start", "visits"])
-weekly_df["week_start"] = pd.to_datetime(weekly_df["week_start"])
-weekly_df = weekly_df.sort_values("week_start").reset_index(drop=True)
-
-# Priklad: tabulka s priemerom (avg_length_by_category)
-for group_key, total_value in sums.items():
-    count     = counts[group_key]
-    avg_value = total_value / count if count else float("nan")
-    rows.append({"category": group_key, "n": count, "avg_value": avg_value})
-```
-
-**`counter_to_dataframe()`** prevedie `Counter` → zoznam riadkov → DataFrame a zoradí podľa počtu zostupne.
-
----
-
-### 9. Výpočet štatistík – `compute_statistics()`
-
-Táto funkcia spúšťa tri testy. Výsledky vráti ako slovník, ktorý sa uloží do súboru a vykreslí v poslednom paneli grafu.
-
----
-
-### 10. Uloženie výsledkov a kreslenie
-
-```python
-save_statistics(stat_results, args.outdir)  → statistics.txt
-make_overview_plot(args.outdir, tables, stat_results)  → overview.png
-```
-
-`make_overview_plot()` vytvorí `matplotlib` figure s `total_plots = 2 + len(CUSTOM_ANALYSES) + 1` panelmi a uloží ho ako PNG.
-
----
-
-## Štatistické metódy a vzorce
-
----
-
-### 1. Spearmanová korelácia – trend návštevnosti
-
-**Otázka:** Rastie alebo klesá návštevnosť webu v čase?
-
-**Nezávislá premenná (IV):** poradie týždňa (0, 1, 2, ...) – premená reprezentujúca čas
-
-**Závislá premenná (DV):** počet návštev v danom týždni
-
-**Prečo Spearman a nie Pearson?**
-
-Pearsonova korelácia predpokladá normálne rozdelenie a lineárny vzťah. Spearmanová korelácia pracuje s **poradiami hodnôt** – je robustnejšia voči outlierom a nevyžaduje lineárny vzťah, len monotónny (keď jedna premenná rastie, druhá tiež rastie alebo klesá).
-
-#### Vzorec
-
-Spearmanová korelácia = **Pearsonova korelácia aplikovaná na poradia**:
-
-$$
-r_s = \frac{\text{cov}(R_X, R_Y)}{\sigma_{R_X} \cdot \sigma_{R_Y}}
-$$
-
-kde $R_X$ a $R_Y$ sú poradia hodnôt $X$ a $Y$.
-
-Zjednodušený vzorec (keď nie sú viazané poradie):
-
-$$
-r_s = 1 - \frac{6 \sum_{i=1}^{n} d_i^2}{n(n^2 - 1)}
-$$
-
-kde:
-- $n$ = počet dátových bodov (počet týždňov)
-- $d_i$ = rozdiel poradí pre $i$-ty bod: $d_i = \text{rank}(X_i) - \text{rank}(Y_i)$
-
-#### Kód v skripte
-
-```python
-week_rank = np.arange(n_weeks, dtype=float)       # 0, 1, 2, ..., n-1
-visits    = weekly_df["visits"].to_numpy(dtype=float)
-
-sp_result = scipy_stats.spearmanr(week_rank, visits)
-stat_results["spearman_r"] = float(sp_result.statistic)
-stat_results["spearman_p"] = float(sp_result.pvalue)
-```
-
-Bez scipy sa počíta manuálne cez `np.corrcoef` aplikovaný na poradia:
-
-```python
-def _rank_array(arr):
-    order = np.argsort(arr)
-    ranks = np.empty_like(order, dtype=float)
-    ranks[order] = np.arange(1, len(arr) + 1, dtype=float)
-    return ranks
-
-r_matrix = np.corrcoef(_rank_array(week_rank), _rank_array(visits))
-stat_results["spearman_r"] = float(r_matrix[0, 1])
-```
-
-#### Interpretácia rozsahov
-
-| Hodnota $r_s$ | Interpretácia |
-|---|---|
-| $+1.0$ | Dokonalý rastúci trend |
-| $+0.7$ až $+1.0$ | Silná pozitívna korelácia |
-| $+0.3$ až $+0.7$ | Stredná pozitívna korelácia |
-| $-0.3$ až $+0.3$ | Slabá alebo žiadna korelácia |
-| $-0.7$ až $-0.3$ | Stredná negatívna korelácia |
-| $-1.0$ | Dokonalý klesajúci trend |
-
-#### Výsledok z datasetu
-
-```
-r = 0.1090,  p = 1.1633e-01
-Záver: Korelácia nie je štatisticky významná (p >= 0.05)
-```
-
-$r_s = 0.109$ je slabá kladná korelácia. Keďže $p = 0.116 > 0.05$, **neodmietame nulovú hypotézu** – dáta nepotvrdzujú štatisticky významný rastúci ani klesajúci trend v návštevnosti.
-
-**Nulová hypotéza $H_0$:** Medzi poradím týždňa a počtom návštev neexistuje monotónna závislosť ($r_s = 0$).
-
----
-
-### 2. Chi-kvadrát test + Cramerov V – obsah webu a krízové obdobie
-
-**Otázka:** Závisí kategória obsahu, ktorú používatelia navštevujú, od toho, či je krízové alebo bežné obdobie?
-
-**Nezávislá premenná (IV):** `crisis` (0 = bežné, 1 = krízové)
-
-**Závislá premenná (DV):** `category` (kategória obsahu stránky)
-
-Obe premenné sú **nominálne (kategorické)** – preto sa používa chi-kvadrát test, nie t-test ani ANOVA.
-
-#### Kontingentná tabuľka
-
-Pred testom sa zostaví kontingentná tabuľka. Každá bunka obsahuje počet riadkov s danou kombináciou:
-
-|  | category A | category B | category C | ... |
-|---|---|---|---|---|
-| crisis = 0 | 80 000 | 45 000 | 32 000 | ... |
-| crisis = 1 | 12 000 | 30 000 | 18 000 | ... |
-
-#### Vzorec chi-kvadrát
-
-$$
-\chi^2 = \sum_{i} \sum_{j} \frac{(O_{ij} - E_{ij})^2}{E_{ij}}
-$$
-
-kde:
-- $O_{ij}$ = **pozorovaný** počet v bunke $(i, j)$
-- $E_{ij}$ = **očakávaný** počet pri platnosti $H_0$ (nezávislosť): $E_{ij} = \frac{R_i \cdot C_j}{N}$
-  - $R_i$ = súčet $i$-teho riadka (celkový počet prístupov v danom krízovm stave)
-  - $C_j$ = súčet $j$-teho stĺpca (celkový počet prístupov v danej kategórii)
-  - $N$ = celkový počet pozorovaní
-
-#### Stupne voľnosti
-
-$$
-df = (r - 1)(c - 1)
-$$
-
-kde $r$ = počet riadkov, $c$ = počet stĺpcov kontingentnej tabuľky.
-
-V datasete: $df = (2-1)(6-1) = 5$.
-
-#### Cramerov V – sila závislosti
-
-Chi-kvadrát samotný hovorí len o tom, **či** závislosť existuje, nie o tom, **ako silná** je. Cramerov V normalizuje chi-kvadrát do rozsahu $\langle 0, 1 \rangle$:
-
-$$
-V = \sqrt{\frac{\chi^2}{N \cdot \min(r-1,\; c-1)}}
-$$
-
-kde:
-- $N$ = celkový počet pozorovaní
-- $\min(r-1, c-1)$ = menší z rozmerov tabuľky mínus 1
-
-| Cramerov V | Interpretácia (podľa Cohena) |
-|---|---|
-| $V < 0.1$ | Zanedbateľná sila |
-| $0.1 \leq V < 0.3$ | Malá sila |
-| $0.3 \leq V < 0.5$ | Stredná sila |
-| $V \geq 0.5$ | Silná závislosť |
-
-#### Kód v skripte
-
-```python
-# Zostavenie kontingentnej tabulky
-cont_table = np.zeros((len(crisis_vals), len(category_vals)), dtype=float)
-for (cv, catv), cnt in chi2_counter.items():
-    cont_table[crisis_idx[cv], category_idx[catv]] = float(cnt)
-
-# Chi-kvadrat test
-chi2_stat, chi2_p, chi2_dof, _ = scipy_stats.chi2_contingency(cont_table)
-
-# Cramerov V
-n_total  = float(cont_table.sum())
-min_dim  = min(len(crisis_vals), len(category_vals)) - 1
-cramer_v = float(np.sqrt(chi2_stat / (n_total * min_dim)))
-```
-
-#### Výsledok z datasetu
-
-```
-chi2 = 225219.72,  df = 5,  p = 0.0000e+00
-Cramerov V = 0.3298
-Záver: Štatisticky významná závislosť (p < 0.05) – stredná sila
-```
-
-$\chi^2 = 225\,219.72$ je extrémne vysoké – s toľkými pozorovaniami aj malý rozdiel v rozložení kategórií sa prejaví ako štatisticky významný. Cramerov $V = 0.33$ hovorí, že sila je **stredná** – rozloženie kategórií sa v krízovom a bežnom období reálne líši.
-
-**Nulová hypotéza $H_0$:** Kategória obsahu a krízový stav sú nezávislé (rozloženie kategórií je rovnaké v krízovom aj bežnom období).
-
----
-
-### 3. Kruskal-Wallis test – čas na stránke podľa kategórie
-
-**Otázka:** Trávia používatelia štatisticky rôzne dlhý čas na stránkach rôznych kategórií?
-
-**Nezávislá premenná (IV):** `category` (nominálna, viac skupín)
-
-**Závislá premenná (DV):** `length` (čas strávený na stránke, číselná)
-
-**Prečo Kruskal-Wallis a nie ANOVA?**
-
-ANOVA predpokladá normálne rozdelenie a homogénne rozptyly v skupinách. Webové logovanie typicky generuje dáta s výrazne nesymetrickým rozdelením (väčšina návštev je krátka, občas veľmi dlhé – outliere). Kruskal-Wallis je **neparametrická** alternatíva k jednosmernej ANOVA – pracuje s **poradiami hodnôt** namiesto so surovými číslami a nevyžaduje žiadne predpoklady o rozdelení.
-
-#### Vzorec Kruskal-Wallis
-
-$$
-H = \frac{12}{N(N+1)} \sum_{i=1}^{k} \frac{n_i \bar{R}_i^2}{1} - 3(N+1)
-$$
-
-Presnejší tvar (štandardný):
-
-$$
-H = \left(\frac{12}{N(N+1)} \sum_{i=1}^{k} \frac{T_i^2}{n_i}\right) - 3(N+1)
-$$
-
-kde:
-- $k$ = počet skupín (počet kategórií obsahu)
-- $N$ = celkový počet pozorovaní vo všetkých skupinách
-- $n_i$ = počet pozorovaní v $i$-tej skupine
-- $T_i$ = súčet poradí v $i$-tej skupine (každé pozorovanie dostane globálne poradie od 1 do $N$)
-- $\bar{R}_i = T_i / n_i$ = priemerné poradie v $i$-tej skupine
-
-Štatistika $H$ sa pri platnosti $H_0$ riadi **chi-kvadrát rozdelením** s $df = k - 1$ stupňami voľnosti.
-
-#### Intuitívne vysvetlenie
-
-1. Všetkým hodnotám `length` (zo všetkých kategórií dohromady) priradíme poradie od 1 (najkratšia návšteva) po $N$ (najdlhšia).
-2. Pre každú kategóriu spočítame priemerné poradie.
-3. Ak sú priemerné poradia vo všetkých kategóriách podobné → $H$ je malé → kategória nemá vplyv na čas.
-4. Ak niektoré kategórie majú konzistentne vyššie poradia (dlhšie návštevy) a iné nižšie → $H$ je veľké → zamietame $H_0$.
-
-#### Kód v skripte
-
-```python
-# Zostavenie zoznamov vzoriek pre kazdu kategoriu (min. 5 hodnot)
-kw_groups = [
-    np.array(samples, dtype=float)
-    for samples in results["length_sample_by_category"].values()
-    if len(samples) >= 5
-]
-
-# Kruskal-Wallis test
-h_stat, kw_p = scipy_stats.kruskal(*kw_groups)
-```
-
-`*kw_groups` rozbalí zoznam skupín ako samostatné argumenty – `scipy_stats.kruskal()` prijíma ľubovoľný počet skupín.
-
-Zber vzoriek sa robí v `_process_length_sample()` s limitom 5 000 hodnôt na kategóriu (`MAX_SAMPLE_PER_CATEGORY = 5000`), aby sa predišlo nadmernej spotrebe pamäte.
-
-#### Výsledok z datasetu
-
-```
-H = 491.58,  p = 5.2436e-104
-Záver: Štatisticky významné rozdiely medzi kategóriami (p < 0.05)
-```
-
-$H = 491.58$ s $p \approx 5.2 \times 10^{-104}$ je extrémne silný výsledok. **Odmietame $H_0$** – čas strávený na stránke sa štatisticky významne líši medzi rôznymi kategóriami obsahu.
-
-**Nulová hypotéza $H_0$:** Rozdelenie času stráveného na stránke (`length`) je rovnaké pre všetky kategórie obsahu.
-
----
-
-## Prehľad všetkých použitých funkcií
-
-| Funkcia | Čo robí |
-|---|---|
-| `main()` | Vstupný bod: parsuje argumenty, volá ostatné funkcie v správnom poradí |
-| `build_arg_parser()` | Vytvorí `argparse` parser pre `--input`, `--outdir`, `--chunksize` |
-| `ensure_outdir()` | Vytvorí výstupný priečinok ak neexistuje (`mkdir parents=True`) |
-| `process_csv()` | Číta CSV po chunkoch, zbiera všetky agregácie, vracia slovník výsledkov |
-| `normalize_text_columns()` | Zavolá `normalize_text_series()` na každý textový stĺpec |
-| `normalize_text_series()` | Prevedie na string, nahradí NaN / prázdne / pomlčku za `"UNKNOWN"` |
-| `get_text_columns_for_normalization()` | Zostavi zoznam stĺpcov na normalizáciu z konfigurácií |
-| `_process_unique_values()` | Do setov zbiera unikátne IP, agentov, user-agentov |
-| `_process_count_analyses()` | `Counter.update()` pre každý stĺpec z `COUNT_ANALYSES` |
-| `_process_weekly_visits()` | Unix timestamp → týždenný bucket, počíta návštevy po týždňoch |
-| `build_week_start()` | `to_period("W").dt.start_time` – dátum pondelka daného týždňa |
-| `_process_chi2_counts()` | `groupby(["crisis","category"]).size()` → Counter pre chi-kvadrát |
-| `_process_length_sample()` | Zbiera vzorky `length` na kategóriu (max 5 000) pre K-W test |
-| `_process_custom_analysis()` | Vlastné agregácie: filter, počet alebo priemer podľa `CUSTOM_ANALYSES` |
-| `build_tables()` | Counter/slovníky → DataFrame tabuľky zoradené podľa počtu |
-| `counter_to_dataframe()` | Counter (key → hodnota) → DataFrame s pomenovanými stĺpcami |
-| `compute_statistics()` | Spearman + Chi-kvadrát/Cramerov V + Kruskal-Wallis, vracia slovník |
-| `save_statistics()` | Formátuje výsledky ako text a uloží do `statistics.txt` |
-| `make_overview_plot()` | Vytvorí multi-panel PNG graf a uloží do `overview.png` |
-
----
-
-## Konfigurácia analýz
-
-Skript je riadený dvoma konfiguračnými zoznamami na vrchu súboru:
-
-### `COUNT_ANALYSES`
-
-Definuje jednoduché agregácie (koľkokrát sa každá hodnota stĺpca vyskytuje):
-
-```python
-COUNT_ANALYSES = [
-    {"table_key": "weekly_df",   "kind": "weekly",  "column": "week"},
-    {"table_key": "category_df", "kind": "column",  "column": "category"},
-    {"table_key": "webpart_df",  "kind": "column",  "column": "webPart"},
-    ...
-]
-```
-
-### `CUSTOM_ANALYSES`
-
-Definuje vlastné analýzy s filtrami, priemermi a typom grafu:
-
-```python
-CUSTOM_ANALYSES = [
-    {
-        "name":       "avg_length_by_category",
-        "group_cols": ["category"],
-        "value_col":  "length",          # ak je vyplnene -> pocita priemer
-        "chart":      "barh",
-        "top_n":      10,
-        "title":      "Priemerná dĺžka návštevy podľa kategórie",
-    },
-    {
-        "name":       "categories_during_crisis",
-        "group_cols": ["category"],
-        "chart":      "barh",
-        "top_n":      15,
-        "filter":     {"crisis": "1"},   # len krizove obdobie
-        "title":      "Najpopulárnejšie kategórie počas krízy",
-    },
-    ...
-]
-```
-
-Pridanie nového grafu = pridanie nového slovníka do `CUSTOM_ANALYSES`. Skript ho automaticky spracuje a vykreslí.
-
----
-
-## Najdôležitejšie technické koncepty
-
-### Prečo Counter a nie DataFrame pre agregáciu?
-
-`Counter` je oveľa pamäťovo efektívnejší pri chunkovanom spracovaní. Keby sme každý chunk ukladali ako DataFrame a potom ich spájali (`pd.concat`), pamäť by rástla lineárne. `Counter.update()` iba pripočítava hodnoty, pamäť ostáva konštantná.
-
-### `defaultdict(list)` vs. bežný slovník
-
-```python
-length_sample_by_category = defaultdict(list)
-# ...
-length_sample_by_category[cat_val].extend(values)
-```
-
-`defaultdict(list)` automaticky vytvorí prázdny zoznam pre každý nový kľúč. Bez neho by sme museli písať:
-
-```python
-if cat_val not in length_sample_by_category:
-    length_sample_by_category[cat_val] = []
-length_sample_by_category[cat_val].extend(values)
-```
-
-### `errors="coerce"` pri konverzii čísel
-
-```python
-unix_time = pd.to_numeric(chunk["unixTime"], errors="coerce")
-```
-
-Ak sa hodnota nedá previesť na číslo, namiesto výnimky sa vloží `NaN`. Tým sa predíde pádu skriptu pri poškodených riadkoch.
-
-### Voliteľné knižnice – `try/except` import
-
-```python
 try:
     import matplotlib.pyplot as plt
     PLOT_AVAILABLE = True
 except Exception:
     PLOT_AVAILABLE = False
+
+try:
+    from scipy import stats as scipy_stats
+    SCIPY_AVAILABLE = True
+except Exception:
+    SCIPY_AVAILABLE = False
 ```
 
-Skript beží aj bez `matplotlib` alebo `scipy` – len preskočí grafy alebo štatistické p-hodnoty.
+| Knižnica / modul | Účel |
+|---|---|
+| `argparse` | Spracovanie argumentov príkazového riadku (`--input`, `--outdir`) |
+| `logging` | Výpis informačných správ počas behu (`INFO: Nacitavam data...`) |
+| `pathlib.Path` | Objektovo-orientovaná práca so súborovými cestami |
+| `numpy` | Matematické operácie s poľami čísel (rank, corrcoef, arange) |
+| `pandas` | Načítanie CSV, práca s DataFrame (tabuľkami) |
+| `matplotlib` | Kreslenie grafov |
+| `scipy.stats` | Štatistické testy (Spearman, Chi-square, Kruskal-Wallis) |
+
+Dôležité: `matplotlib` a `scipy` sú obalené v `try/except` – skript nevyhodí chybu, ak nie sú nainštalované. Grafy a niektoré štatistiky budú preskočené, ale zvyšok pobeží.
 
 ---
 
-## Súhrn štatistických výsledkov
-
-| Test | IV | DV | Výsledok | Záver |
-|---|---|---|---|---|
-| Spearmanová korelácia | Poradie týždňa | Počet návštev | $r_s = 0.109$, $p = 0.116$ | Trend **nie je** štatisticky významný |
-| Chi-kvadrát + Cramerov V | `crisis` | `category` | $\chi^2 = 225\,219$, $V = 0.33$ | Závislosť **je** štatisticky významná, stredná sila |
-| Kruskal-Wallis | `category` | `length` | $H = 491.58$, $p \approx 0$ | Rozdiely **sú** štatisticky významné |
-
----
-
-## Možné otázky profesora – otázky a odpovede
-
----
-
-### Otázky o p-hodnote a štatistickej významnosti
-
-**Q: Čo je p-hodnota?**
-
-A: p-hodnota je pravdepodobnosť, že by sme dostali taký istý alebo extrémnejší výsledok, keby platila nulová hypotéza (teda keby žiadna závislosť neexistovala). Čím menšia p-hodnota, tým menej pravdepodobné je, že výsledok je náhoda.
-
-**Q: Prečo používame hranicu 0.05?**
-
-A: Je to konvencia – 5 % riziko, že odmietame nulovú hypotézu, aj keď platí (chyba 1. druhu). Inak povedané: akceptujeme 5 % šancu falošného poplachu. V praxi sa používa aj 0.01 alebo 0.001 pre prísnejšie testy.
-
-**Q: Čo znamená, že výsledok je "štatisticky významný"?**
-
-A: Znamená to, že zamietame nulovú hypotézu – závislosť pozorovaná v dátach je natoľko silná, že je nepravdepodobné, že by vznikla náhodou. **Neznamená to, že závislosť je prakticky dôležitá** – pri veľkom datasete (milióny riadkov) môže byť aj veľmi slabá závislosť štatisticky významná.
-
----
-
-### Otázky o Spearmanovej korelácie
-
-**Q: Prečo ste použili Spearmanovú koreláciu a nie Pearsonovu?**
-
-A: Pearsonova korelácia meria silu **lineárneho** vzťahu a predpokladá normálne rozdelenie. Spearmanová korelácia pracuje s **poradiami hodnôt** a meria len to, či je vzťah **monotónny** (keď rastie jedna premenná, druhá tiež rastie alebo klesá) – nevyžaduje lineárnosť ani normálne rozdelenie. Návštevnosť webu môže mať nesymetrické rozdelenie (skokové udalosti, výpadky), preto je Spearman vhodnejší.
-
-**Q: Čo je nezávislá (IV) a závislá premenná (DV) v Spearmanovej korelácie?**
-
-A: IV = poradie týždňa (0, 1, 2, ...) – reprezentuje plynutie času. DV = počet návštev v danom týždni. Skúmame, či sa návštevnosť mení systematicky s časom.
-
-**Q: Vysvetlite vzorec Spearmanovej korelácie.**
-
-A: Spearmanová korelácia je Pearsonova korelácia aplikovaná na **poradia** hodnôt. Každej hodnote sa priradí jej poradie (1 = najmenšia, n = najväčšia). Potom:
-
-$$r_s = 1 - \frac{6 \sum_{i=1}^{n} d_i^2}{n(n^2 - 1)}$$
-
-kde $d_i$ je rozdiel poradí pre $i$-ty bod (poradie v týždennej osi mínus poradie v počte návštev). Ak sú poradia totožné, $d_i = 0$ pre každý bod a $r_s = 1$.
-
-**Q: Čo znamená $r_s = 0.109$ v kontexte vašich dát?**
-
-A: Je to veľmi slabá kladná korelácia – takmer žiadna. Keďže $p = 0.116 > 0.05$, neodmietame nulovú hypotézu. Dáta nepotvrdzujú, že by návštevnosť bankovej webstránky systematicky rástla alebo klesala v čase počas sledovaného obdobia.
-
-**Q: Ako ste v kóde vypočítali Spearmanovú koreláciu bez scipy?**
-
-A: Manuálne cez `np.corrcoef` aplikovaný na poradia. Funkcia `_rank_array()` prevedie pole hodnôt na pole poradí pomocou `np.argsort()` – najprv zistí poradie indexov pri zoradení, potom priradí každej hodnote jej poradie (1 až n). Potom `np.corrcoef` vypočíta Pearsonov r na týchto poradiach, čo je ekvivalentné Spearmanovmu r.
-
----
-
-### Otázky o Chi-kvadrát teste
-
-**Q: Prečo ste použili Chi-kvadrát test pre vzťah crisis a category?**
-
-A: Obe premenné sú **nominálne (kategorické)** – `crisis` má hodnoty 0/1, `category` má niekoľko textových hodnôt. Pre kategorické premenné sa nemôže použiť t-test ani ANOVA (tie vyžadujú číselné DV). Chi-kvadrát test porovnáva **pozorované** rozloženie hodnôt s **očakávaným** rozložením pri nezávislosti.
-
-**Q: Čo je kontingentná tabuľka a ako ste ju zostavili?**
-
-A: Kontingentná tabuľka je matica, kde riadky = hodnoty jednej premennej (crisis: 0 alebo 1) a stĺpce = hodnoty druhej premennej (kategórie obsahu). Každá bunka obsahuje počet riadkov s danou kombináciou. V kóde sa zostavuje takto:
+### 2. CLI argumenty – `build_arg_parser()`
 
 ```python
-cont_table = np.zeros((len(crisis_vals), len(category_vals)), dtype=float)
-for (cv, catv), cnt in chi2_counter.items():
-    cont_table[crisis_idx[cv], category_idx[catv]] = float(cnt)
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Jednoducha analyza logs5.csv")
+    parser.add_argument("--input",  default=Path("logs5.csv"),              type=Path)
+    parser.add_argument("--outdir", default=Path("analysis_output_simple"), type=Path)
+    return parser
 ```
 
-`chi2_counter` bol plnený počas chunkovania cez `groupby(["crisis","category"]).size()`.
+Spustenie skriptu z terminálu:
+```
+python analyze.py --input logs5.csv --outdir analysis_output_simple
+```
 
-**Q: Vysvetlite vzorec chi-kvadrát – čo je $O_{ij}$ a $E_{ij}$?**
-
-A: $O_{ij}$ = **pozorovaný** počet v bunke (koľko riadkov skutočne má danú kombináciu crisis a category). $E_{ij}$ = **očakávaný** počet, ktorý by sme dostali, keby obe premenné boli úplne nezávislé:
-
-$$E_{ij} = \frac{R_i \cdot C_j}{N}$$
-
-kde $R_i$ = súčet $i$-teho riadka, $C_j$ = súčet $j$-teho stĺpca, $N$ = celkový počet riadkov. Ak sú pozorované a očakávané počty veľmi podobné → $\chi^2$ je malé → premenné sú nezávislé.
-
-**Q: Čo sú stupne voľnosti pri chi-kvadrát teste a prečo df = 5?**
-
-A: $df = (r-1)(c-1)$, kde $r$ = počet riadkov a $c$ = počet stĺpcov tabuľky. V datasete: `crisis` má 2 hodnoty (0 a 1), `category` má 6 kategórií → $df = (2-1)(6-1) = 1 \times 5 = 5$. Stupne voľnosti hovoria, koľko buniek tabuľky je "voľných" – keď poznáme súčty riadkov a stĺpcov, zvyšné bunky sú jednoznačne určené.
-
-**Q: Prečo je $\chi^2 = 225\,219$ tak obrovské? Je to problém?**
-
-A: Nie je to problém, ale je to dôsledok veľkého datasetu. Chi-kvadrát je kumulatívna suma cez všetky bunky tabuľky – pri miliónoch riadkov aj malý percentuálny rozdiel medzi pozorovaným a očakávaným rozložením dá veľké absolútne číslo. Preto sa pridáva **Cramerov V**, ktorý normalizuje chi-kvadrát na rozsah 0–1 a hovorí o skutočnej **sile** závislosti nezávisle od veľkosti datasetu.
-
-**Q: Čo je Cramerov V a ako sa interpretuje?**
-
-A: Cramerov V meria silu závislosti medzi dvoma kategorickými premennými v rozsahu 0 (žiadna závislosť) až 1 (dokonalá závislosť):
-
-$$V = \sqrt{\frac{\chi^2}{N \cdot \min(r-1,\; c-1)}}$$
-
-Podľa Cohena: $V < 0.1$ zanedbateľné, $0.1$–$0.3$ malá, $0.3$–$0.5$ stredná, $\geq 0.5$ silná. V datasete $V = 0.33$ → stredná sila – rozloženie kategórií obsahu sa reálne líši medzi krízovým a bežným obdobím.
-
-**Q: Aká je nulová hypotéza chi-kvadrát testu?**
-
-A: $H_0$: Kategória obsahu a krízový stav sú **nezávislé** – rozloženie kategórií je rovnaké bez ohľadu na to, či je krízové alebo bežné obdobie. Zamietame $H_0$ (p ≈ 0) – teda krízové obdobie súvisí s iným rozložením kategórií obsahu.
+- `argparse` parsuje argumenty z príkazového riadku
+- `default=...` – ak argument chýba, použije sa predvolená hodnota
+- `type=Path` – automaticky konvertuje textový reťazec na objekt `Path`
 
 ---
 
-### Otázky o Kruskal-Wallis teste
+### 3. Načítanie dát – `load_data()`
 
-**Q: Prečo ste použili Kruskal-Wallis a nie jednosmernú ANOVA?**
+Toto je **najdôležitejšia funkcia** – transformuje surové CSV na čistý DataFrame.
 
-A: ANOVA predpokladá **normálne rozdelenie** hodnôt v každej skupine a **homogenitu rozptylov** (Leveneov test). Čas strávený na webstránke (`length`) má typicky výrazne nesymetrické rozdelenie – väčšina návštev je krátka, ale niektoré sú extrémne dlhé (outliere). Kruskal-Wallis je **neparametrický** test – nepredpokladá normálne rozdelenie, pracuje s **poradiami** hodnôt namiesto surovými číslami.
+```python
+df = pd.read_csv(
+    input_path,
+    sep=";",
+    quotechar='"',
+    usecols=USECOLS,
+    low_memory=False,
+)
+```
 
-**Q: Vysvetlite intuitívne, čo Kruskal-Wallis počíta.**
+- `sep=";"` – oddeľovač stĺpcov je bodkočiarka (nie čiarka)
+- `quotechar='"'` – textové hodnoty môžu byť ohraničené úvodzovkami
+- `usecols=USECOLS` – načíta iba 12 potrebných stĺpcov (rýchlejšie, menej pamäte)
+- `low_memory=False` – zabraňuje varovaniu o zmiešaných dátových typoch
 
-A: Zoberieme všetky hodnoty `length` zo všetkých kategórií dohromady a priradíme im globálne poradia (1 = najkratšia návšteva, N = najdlhšia). Potom pre každú kategóriu spočítame priemerné poradie. Ak sú priemerné poradia vo všetkých kategóriách podobné, kategória nemá vplyv na dĺžku návštevy ($H$ je malé). Ak niektoré kategórie majú konzistentne vysoké poradia (dlhé návštevy) a iné nízke, $H$ je veľké a zamietame $H_0$.
+#### Normalizácia textu
 
-**Q: Vysvetlite vzorec Kruskal-Wallis.**
+```python
+for col in ["anonIP", "category", "webPart", "urlExt", "yearQuartal", "internal", "crisis"]:
+    df[col] = normalize_text(df[col])
+```
 
-$$H = \left(\frac{12}{N(N+1)} \sum_{i=1}^{k} \frac{T_i^2}{n_i}\right) - 3(N+1)$$
+```python
+def normalize_text(series: pd.Series, default: str = "UNKNOWN") -> pd.Series:
+    return series.astype("string").fillna(default).replace({"": default, "-": default})
+```
 
-- $N$ = celkový počet pozorovaní (súčet vzoriek zo všetkých kategórií)
-- $k$ = počet skupín (kategórií obsahu)
-- $n_i$ = počet pozorovaní v $i$-tej kategórii
-- $T_i$ = **súčet poradí** v $i$-tej kategórii
+- `.astype("string")` – zabezpečí, že stĺpec je textový (nie `object`)
+- `.fillna(default)` – prázdne (`NaN`) hodnoty nahrádza reťazcom `"UNKNOWN"`
+- `.replace({"": default, "-": default})` – prázdny reťazec `""` a pomlčka `"-"` sa tiež nahradia
 
-Ak sú poradia rovnomerne rozdelené medzi skupinami, $T_i / n_i$ je rovnaké pre každú skupinu a $H$ je blízke nule. Štatistika $H$ sa riadi chi-kvadrát rozdelením s $df = k - 1$.
+**Prečo?** Bez normalizácie by sa `""`, `"-"` a `NaN` počítali ako tri rôzne hodnoty, hoci všetky znamenajú "chýbajúca hodnota".
 
-**Q: Aká je nulová hypotéza Kruskal-Wallis testu?**
+#### Konverzia čísel
 
-A: $H_0$: Rozdelenie času stráveného na stránke (`length`) je **rovnaké pre všetky kategórie** obsahu – kategória obsahu nemá vplyv na to, ako dlho používateľ na stránke zostane. Zamietame $H_0$ ($H = 491.58$, $p \approx 5.2 \times 10^{-104}$).
+```python
+for col in ["year", "quartal", "week", "length", "unixTime"]:
+    df[col] = pd.to_numeric(df[col], errors="coerce")
+```
 
-**Q: Prečo zbieráte maximálne 5 000 vzoriek na kategóriu?**
+- `pd.to_numeric(..., errors="coerce")` – neplatné hodnoty (napr. text v číselnom stĺpci) sa prevedú na `NaN` namiesto vyhodenia chyby
 
-A: Kruskal-Wallis nepotrebuje všetky dáta – test je dostatočne presný aj so vzorkou. Pri miliónoch riadkov by uloženie všetkých hodnôt `length` pre každú kategóriu spotrebovalo príliš veľa pamäte. Konštanta `MAX_SAMPLE_PER_CATEGORY = 5000` je kompromis medzi presnosťou testu a spotrebou pamäte.
+#### Odvodenie hodiny a dňa v týždni
 
-**Q: Čo znamená $p \approx 5.2 \times 10^{-104}$?**
+```python
+ts = pd.to_datetime(df["unixTime"], unit="s", errors="coerce", utc=True)
+df["hour"]      = ts.dt.hour
+df["dayofweek"] = ts.dt.dayofweek   # 0=pondelok ... 6=nedeľa
+```
 
-A: Je to astronomicky malá p-hodnota – prakticky nula. Pravdepodobnosť, že by sme dostali $H = 491.58$ náhodou (pri platnosti $H_0$), je $5.2 \times 10^{-104}$. Jednoznačne odmietame nulovú hypotézu – kategória obsahu má preukázateľný vplyv na dĺžku návštevy.
+- `pd.to_datetime(..., unit="s")` – prevod Unix timestamp (sekundy) na datetime objekt
+- `utc=True` – interpretujeme čas ako UTC (dôležité pre konzistentnosť)
+- `ts.dt.hour` – hodina dňa (0–23)
+- `ts.dt.dayofweek` – deň v týždni (0=pondelok, 6=nedeľa)
 
----
-
-### Otázky o kóde a implementácii
-
-**Q: Prečo CSV čítate po chunkoch a nie naraz?**
-
-A: `pd.read_csv()` bez `chunksize` načíta celý súbor do RAM. Pri logoch s miliónmi riadkov to môže byť gigabajty. S `chunksize=N` dostaneme **iterátor**, ktorý do pamäte načíta vždy len N riadkov, spracuje ich a uvoľní. Pamäťová náročnosť je tak konštantná, nie lineárna s veľkosťou súboru.
-
-**Q: Prečo používate `Counter` namiesto toho, aby ste každý chunk uložili do DataFrame a nakoniec ich spájali?**
-
-A: `pd.concat()` pri každom volání alokuje novú pamäť pre výsledný DataFrame – pamäť by rástla lineárne. `Counter.update()` iba inkrementuje existujúce hodnoty v slovníku, bez alokácie nových štruktúr. Je to rádovo efektívnejšie pre agregáciu veľkého množstva dát.
-
-**Q: Prečo používate `set` pre unikátne IP adresy?**
-
-A: Set (množina) garantuje unikátnosť – duplikáty sa automaticky ignorujú. Vyhľadávanie v sete je O(1) (konštantný čas) oproti O(n) v zozname. `set.update()` hromadne pridá hodnoty z iterovateľného objektu a ignoruje existujúce.
-
-**Q: Čo robí `errors="coerce"` pri `pd.to_numeric()`?**
-
-A: Ak sa hodnota nedá previesť na číslo (napr. text v stĺpci `unixTime`), namiesto vyhodenia výnimky sa vloží `NaN`. Skript tak nezlyhá pri poškodených alebo neočakávaných hodnotách v dátach.
-
-**Q: Prečo normalizujete textové stĺpce pred analýzou?**
-
-A: Bez normalizácie by tá istá "chýbajúca hodnota" existovala v rôznych podobách: `NaN`, `""` (prázdny reťazec), `"-"` (pomlčka). Pri agregácii (`Counter.update()`, `groupby()`) by sa tieto formy počítali oddelene, čo by skreslilo výsledky. Po normalizácii majú všetky tri podoby jednotnú hodnotu `"UNKNOWN"`.
-
-**Q: Čo je `defaultdict(list)` a prečo ste ho použili?**
-
-A: `defaultdict(list)` je slovník, ktorý pre každý nový kľúč automaticky vytvorí prázdny zoznam. Bez neho by sme pred každým `extend()` museli kontrolovať, či kľúč existuje. Použité pre `length_sample_by_category` – zbieranie vzoriek dĺžky návštevy podľa kategórie.
-
-**Q: Čo robí `to_period("W").dt.start_time`?**
-
-A: `to_period("W")` zaradí každý timestamp do **týždenného intervalu** (bucketu) – napríklad všetky dátumy od pondelka 6.1.2020 do nedele 12.1.2020 dostanú rovnaký period. `.dt.start_time` vráti dátum **začiatku** tohto intervalu (pondelok), čo slúži ako jednotná reprezentácia daného týždňa pri agregácii.
-
-**Q: Čo je `*kw_groups` pri volaní `scipy_stats.kruskal(*kw_groups)`?**
-
-A: `*` je **unpacking operator** – rozbalí zoznam na samostatné argumenty. `kruskal()` prijíma ľubovoľný počet skupín ako pozicionálne argumenty: `kruskal(group1, group2, group3, ...)`. Keďže počet kategórií nie je dopredu známy, zoznam rozbalíme dynamicky.
-
-**Q: Prečo sú `matplotlib` a `scipy` importované v `try/except` bloku?**
-
-A: Skript je navrhnutý tak, aby fungoval aj v prostredí, kde tieto knižnice nie sú nainštalované – iba preskočí grafy alebo štatistické p-hodnoty. Globálne premenné `PLOT_AVAILABLE` a `SCIPY_AVAILABLE` sa nastavujú pri importe a ďalší kód podľa nich rozhoduje, čo vynechá.
-
-**Q: Čo sú `COUNT_ANALYSES` a `CUSTOM_ANALYSES` a prečo sú to zoznamy slovníkov?**
-
-A: Sú to **konfiguračné zoznamy** na vrchu súboru – miesto, kde sa definuje, čo a ako sa analyzuje, bez toho, aby sme menili logiku kódu. Každý slovník je jeden "recept" na analýzu: aký stĺpec, aký typ grafu, aký filter. Pridanie novej analýzy = pridanie nového slovníka do zoznamu. Funkcie `_process_count_analyses()`, `_process_custom_analysis()` a `make_overview_plot()` iterujú cez tieto zoznamy a každú definíciu automaticky spracujú.
+Tieto dve nové premenné (`hour`, `dayofweek`) sú **odvodené IV** – nevyskytujú sa priamo v CSV, ale vytvárame ich z existujúceho stĺpca `unixTime`.
 
 ---
 
-### Otázky o výsledkoch a interpretácii
+### 4. Výpočet štatistík – `compute_statistics()`
 
-**Q: Aký je hlavný záver analýzy?**
+Funkcia vypočíta tri štatistické testy a vráti ich výsledky ako slovník `stats`.
 
-A: Tri závery:
-1. **Návštevnosť v čase** – žiadny štatisticky významný trend ($r_s = 0.109$, $p = 0.116$). Návštevnosť bankovej webstránky sa počas sledovaného obdobia systematicky nemenila.
-2. **Kríza a obsah** – stredne silná závislosť ($V = 0.33$, $p \approx 0$). Počas krízového obdobia používatelia navštevujú iné kategórie obsahu ako v bežnom období.
-3. **Čas na stránke podľa kategórie** – štatisticky významné rozdiely ($H = 491.58$, $p \approx 0$). Rôzne kategórie obsahu priťahujú rôzne dlhé návštevy.
+---
 
-**Q: Prečo je chi-kvadrát štatisticky významný, ale Spearman nie?**
+#### 4a. Spearman – trend návštevnosti v čase
 
-A: Sú to rôzne testy, ktoré skúmajú rôzne vzťahy. Chi-kvadrát testuje závislosť medzi dvoma kategorickými premennými (`crisis` vs. `category`) – a závislosť tam je (stredná sila). Spearman testuje monotónny trend medzi poradím týždňa a počtom návštev – a tento trend je veľmi slabý a štatisticky nevýznamný. Fakt, že krízové obdobie ovplyvňuje kategórie, nehovorí nič o celkovom trende návštevnosti.
+**Otázka:** Je tu monotónny trend v návštevnosti počas týždňov v roku?
 
-**Q: Čo by ste urobili ako ďalší krok po zistení štatisticky významného Kruskal-Wallis testu?**
+```python
+weekly = (
+    df.dropna(subset=["year", "week"])
+    .groupby(["year", "week"])
+    .size()
+    .reset_index(name="visits")
+    .sort_values(["year", "week"])
+)
+```
 
-A: Kruskal-Wallis hovorí, že **aspoň jedna** kategória sa líši, ale nehovorí **ktorá**. Ďalší krok by bol **post-hoc test** – napríklad Dunnov test (neparametrická verzia), ktorý porovná každú dvojicu kategórií a identifikuje, medzi ktorými pármi sú štatisticky významné rozdiely.
+- `.dropna(subset=["year", "week"])` – vyhodíme záznamy bez roku alebo týždňa
+- `.groupby(["year", "week"]).size()` – spočíta, koľko prístupov bolo v každom týždni každého roka
+- `.reset_index(name="visits")` – prevedie výsledok na DataFrame so stĺpcom `visits`
+- `.sort_values(...)` – zoradí chronologicky
+
+```python
+for year, grp in weekly.groupby("year"):
+    x = np.arange(len(grp), dtype=float)   # poradie: 0, 1, 2, ...
+    y = grp["visits"].to_numpy(dtype=float) # počet návštev
+    sp = scipy_stats.spearmanr(x, y)
+```
+
+- Spearmanova korelácia sa počíta **pre každý rok zvlášť**, aby sa nestratil smer trendu (jeden rok môže rásť, iný klesať)
+- `x = np.arange(len(grp))` – poradové čísla týždňov (nie skutočné čísla týždňov, ale poradie)
+- `sp.statistic` = $\rho$ (rho) – sila a smer monotónneho vzťahu (−1 až +1)
+- `sp.pvalue` = p-hodnota pre test H0
+
+**Fallback bez scipy:**
+```python
+rx = pd.Series(x).rank(method="average").to_numpy(dtype=float)
+ry = pd.Series(y).rank(method="average").to_numpy(dtype=float)
+rho = float(np.corrcoef(rx, ry)[0, 1])
+```
+Manuálny výpočet Spearmanovej korelácie: prevedieme hodnoty na **poradie (ranky)** a vypočítame Pearsonovu koreláciu z tých radov.
+
+---
+
+#### 4b. Chi-square + Cramér V – crisis vs. category
+
+**Otázka:** Závisí navštívená kategória obsahu od toho, či je krízové obdobie?
+
+```python
+chi_df = df[["crisis", "category"]].dropna()
+cont   = pd.crosstab(chi_df["crisis"], chi_df["category"])
+```
+
+- `pd.crosstab(...)` – kontingečná tabuľka: riadky = hodnoty `crisis`, stĺpce = hodnoty `category`, bunky = počty
+
+```python
+chi2_stat, chi2_p, chi2_dof, _ = scipy_stats.chi2_contingency(cont.to_numpy(dtype=float))
+```
+
+- `chi2_stat` = $\chi^2$ – testová štatistika
+- `chi2_p` = p-hodnota
+- `chi2_dof` = stupne voľnosti
+
+```python
+n_total  = float(cont.to_numpy(dtype=float).sum())
+min_dim  = min(cont.shape[0], cont.shape[1]) - 1
+cramer_v = float(np.sqrt(chi2_stat / (n_total * min_dim)))
+```
+
+Cramér V sa vypočíta z $\chi^2$ a udáva silu závislosti na škále $\langle 0, 1\rangle$.
+
+---
+
+#### 4c. Kruskal-Wallis – length podľa category
+
+**Otázka:** Líši sa dĺžka obsahu (`length`) medzi rôznymi kategóriami webu?
+
+```python
+kr_df  = df[["category", "length"]].dropna()
+groups = []
+for cat, grp in kr_df.groupby("category"):
+    vals = grp["length"].to_numpy(dtype=float)
+    if len(vals) >= 5:
+        groups.append(vals)
+
+h_stat, p_val = scipy_stats.kruskal(*groups)
+```
+
+- Každá kategória tvorí samostatnú skupinu hodnôt `length`
+- `if len(vals) >= 5` – malé skupiny vynecháme (nestabilné odhady)
+- `*groups` – rozbalenie zoznamu skupín ako samostatných argumentov
+- `h_stat` = H štatistika, `p_val` = p-hodnota
+
+---
+
+### 5. Uloženie reportu – `save_report()`
+
+Funkcia zostaví textový report do zoznamu riadkov a zapíše ho do súboru:
+
+```python
+lines = []
+lines.append("=" * 70)
+lines.append("PRIESKUM DAT O POUZIVANI WEBU KOMERCNEJ BANKY")
+# ... pridávanie riadkov ...
+report_path = outdir / "report.txt"
+report_path.write_text("\n".join(lines), encoding="utf-8")
+```
+
+- `outdir / "report.txt"` – operátor `/` na objektoch `Path` zostaví cestu (ekvivalent `os.path.join`)
+- `"\n".join(lines)` – spojí zoznam riadkov do jedného reťazca
+- `.write_text(..., encoding="utf-8")` – zapíše reťazec do súboru
+
+---
+
+### 6. Grafy – `make_plots()`
+
+Skript generuje 4 grafy. Každý sa uloží ako PNG do výstupného priečinka.
+
+#### Graf 1: Návštevnosť po yearQuartal
+```python
+q = df["yearQuartal"].value_counts(...).sort_values("yearQuartal")
+ax.plot(q["yearQuartal"].astype(str), q["visits"], marker="o")
+```
+Čiarový graf zobrazuje trend návštevnosti v čase – vizualizuje ten istý vzťah, ktorý Spearman meria číselne.
+
+#### Graf 2: Heatmapa deň × hodina
+```python
+h = df.groupby(["dayofweek", "hour"]).size().unstack(fill_value=0)
+ax.imshow(h.to_numpy(), aspect="auto")
+```
+- `.unstack(fill_value=0)` – prevedie dvojúrovňový index na maticu (riadky=dni, stĺpce=hodiny)
+- `ax.imshow(...)` – vykreslí maticu ako obrázok s farebnými intenzitami
+
+#### Graf 3: Heatmapa týždeň × rok
+```python
+pivot_wy = wy.groupby(["year", "week"]).size().unstack(fill_value=0)
+pivot_wy = pivot_wy.reindex(columns=list(range(1, 54)), fill_value=0)
+```
+- `.reindex(columns=list(range(1, 54)))` – zarovná os týždňov na rozsah 1–53 (aj ak niektoré týždne chýbajú) – zlepší porovnanie medzi rokmi
+
+#### Graf 4: Top category
+```python
+top_cat = df["category"].value_counts(dropna=False).head(12)
+ax.barh(top_cat.index.astype(str), top_cat.values)
+ax.invert_yaxis()
+```
+- `barh` – horizontálne stĺpce (lepšia čitateľnosť dlhých názvov kategórií)
+- `.invert_yaxis()` – najčastejšia kategória bude hore (nie dole)
+
+---
+
+### 7. Hlavná funkcia – `main()`
+
+```python
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    parser = build_arg_parser()
+    args   = parser.parse_args()
+
+    if not args.input.exists():
+        raise FileNotFoundError(f"Vstupny subor neexistuje: {args.input}")
+
+    ensure_outdir(args.outdir)
+    df    = load_data(args.input)
+    stats = compute_statistics(df)
+    save_report(df, stats, args.outdir)
+    make_plots(df, args.outdir)
+```
+
+Orchestrátor: volá ostatné funkcie v správnom poradí. Kontroluje existenciu vstupu pred načítaním.
+
+---
+
+## Štatistické metódy a vzorce
+
+### 1. Spearmanova korelácia
+
+$$
+\rho = 1 - \frac{6 \sum d_i^2}{n(n^2 - 1)}
+$$
+
+kde $d_i$ = rozdiel poradí hodnôt $x_i$ a $y_i$, $n$ = počet dvojíc.
+
+**Alternatívne (ako v kóde):**
+$$
+\rho = r_{Pearson}(\text{rank}(x),\, \text{rank}(y))
+$$
+
+**Čo meria:** Monotónny trend – či s rastúcim $x$ (poradie týždňa) rastie aj $y$ (návštevnosť), bez ohľadu na to, či je vzťah lineárny.
+
+**Rozsah:** $-1$ (klesajúci trend) až $+1$ (rastúci trend). $\rho = 0$ = žiadny monotónny vzťah.
+
+**H0 / H1:**
+- $H_0$: Medzi poradím týždňa a návštevnosťou neexistuje monotónna závislosť ($\rho = 0$)
+- $H_1$: Monotónna závislosť existuje ($\rho \neq 0$)
+
+**Prečo Spearman a nie Pearson?** Pearson predpokladá normalitu a lineárny vzťah. Návštevnosť môže mať výrazné outliere (sviatky, kampane) a vzťah nemusí byť lineárny – Spearman je robustný voči obom.
+
+---
+
+### 2. Chi-square test nezávislosti
+
+$$
+\chi^2 = \sum_{i} \sum_{j} \frac{(O_{ij} - E_{ij})^2}{E_{ij}}
+$$
+
+kde $O_{ij}$ = pozorovaná frekvencia, $E_{ij}$ = očakávaná frekvencia (ak sú premenné nezávislé).
+
+**H0 / H1:**
+- $H_0$: `crisis` a `category` sú nezávislé (krízové obdobie neovplyvňuje, ktorý obsah sa navštívi)
+- $H_1$: `crisis` a `category` sú závislé
+
+**Stupne voľnosti:**
+$$
+df = (r - 1)(c - 1)
+$$
+kde $r$ = počet riadkov kontingečnej tabuľky, $c$ = počet stĺpcov.
+
+---
+
+### 3. Cramér V (efektová miera)
+
+$$
+V = \sqrt{\frac{\chi^2}{n \cdot \min(r-1,\, c-1)}}
+$$
+
+**Čo meria:** Silu závislosti medzi dvoma kategorickými premennými po tom, čo Chi-square potvrdí, že závislosť existuje.
+
+**Rozsah:** $0$ (žiadna závislosť) až $1$ (dokonalá závislosť).
+
+**Orientačné hodnoty:**
+
+| Cramér V | Interpretácia |
+|---|---|
+| ≈ 0.1 | Slabá závislosť |
+| ≈ 0.3 | Stredná závislosť |
+| ≈ 0.5+ | Silná závislosť |
+
+**Prečo nestačí $\chi^2$?** $\chi^2$ rastie s veľkosťou vzorky – pri miliónoch záznamov bude skoro vždy štatisticky významné, aj keď je závislosť triviálne slabá. Cramér V normalizuje a dáva skutočnú silu efektu.
+
+---
+
+### 4. Kruskal-Wallis test
+
+$$
+H = \frac{12}{n(n+1)} \sum_{i=1}^{k} \frac{R_i^2}{n_i} - 3(n+1)
+$$
+
+kde $k$ = počet skupín, $n_i$ = veľkosť $i$-tej skupiny, $R_i$ = súčet poradí v $i$-tej skupine, $n$ = celkový počet hodnôt.
+
+**H0 / H1:**
+- $H_0$: Distribúcia `length` je rovnaká vo všetkých kategóriách (mediány sú rovnaké)
+- $H_1$: Aspoň jedna kategória sa líši
+
+**Prečo Kruskal-Wallis a nie ANOVA?** ANOVA predpokladá normalitu distribúcií v skupinách. `length` (dĺžka obsahu) typicky nie je normálne rozdelená (má dlhý chvost). Kruskal-Wallis je neparametrický ekvivalent ANOVA – nevyžaduje normalitu.
+
+**Dôležité:** Kruskal-Wallis len povie "niečo sa líši". Ak $p < 0.05$, nevieme KDE je rozdiel (medzi ktorými dvojicami kategórií). Na to by sme potrebovali **post-hoc test** (napr. Dunn test).
+
+---
+
+## Vysvetlenie kľúčových operácií v kóde
+
+### `groupby` + `size()` vs `value_counts()`
+
+```python
+# groupby variant – vhodný keď grupuješ podľa VIACERÝCH stĺpcov naraz
+df.groupby(["year", "week"]).size().reset_index(name="visits")
+
+# value_counts – skratka pre jeden stĺpec
+df["category"].value_counts(dropna=False)
+```
+
+### `unstack()` – z dlhého formátu na maticu
+
+```python
+h = df.groupby(["dayofweek", "hour"]).size().unstack(fill_value=0)
+```
+
+```
+Pred unstack:
+dayofweek  hour  size
+0          8     120
+0          9     340
+...
+1          8     90
+
+Po unstack (fill_value=0):
+hour        0    1    2  ...  8    9   ...
+dayofweek
+0           0    0    0  ...  120  340 ...
+1           0    0    0  ...  90   ...
+```
+
+`unstack()` prevedie posledný level indexu na stĺpce – ideálne pre heatmapy.
+
+### `reindex` – doplnenie chýbajúcich hodnôt
+
+```python
+pivot_wy = pivot_wy.reindex(columns=list(range(1, 54)), fill_value=0)
+```
+
+Ak v dátach chýba napr. týždeň 53 pre niektorý rok, `reindex` ho doplní s hodnotou 0. Zabezpečí, že všetky roky majú rovnaký počet stĺpcov (1–53) pre správne zobrazenie heatmapy.
+
+### `dropna(subset=[...])` – selektívne vyhadzovanie NaN
+
+```python
+weekly = df.dropna(subset=["year", "week"])
+```
+
+Vyhodí iba riadky, kde je `NaN` v stĺpcoch `year` alebo `week`. Ostatné stĺpce (aj s `NaN`) zostanú – nie sú pre tento výpočet relevantné.
+
+### `*groups` – rozbalenie zoznamu ako argumentov
+
+```python
+groups = [array1, array2, array3, ...]
+scipy_stats.kruskal(*groups)
+# ekvivalentné:
+scipy_stats.kruskal(array1, array2, array3, ...)
+```
+
+`kruskal()` očakáva každú skupinu ako samostatný argument. `*groups` rozbalí zoznam.
+
+### `Path` – práca so cestami
+
+```python
+report_path = outdir / "report.txt"   # nie os.path.join(outdir, "report.txt")
+report_path.write_text(...)           # nie open(...).write(...)
+outdir.mkdir(parents=True, exist_ok=True)  # nie os.makedirs(...)
+```
+
+`pathlib.Path` je modernejší a čitateľnejší spôsob práce so súborovými cestami oproti `os.path`.
+
+---
+
+## Code flow – diagram
+
+```
+START
+  │
+  ├─► build_arg_parser() → args (--input, --outdir)
+  │
+  ├─► Kontrola: vstupný súbor existuje?
+  │     └── NIE → FileNotFoundError
+  │
+  ├─► ensure_outdir() → vytvorí výstupný priečinok
+  │
+  ├─► load_data(input_path)
+  │     ├─ pd.read_csv() → načíta 12 stĺpcov
+  │     ├─ normalize_text() → textové stĺpce (NaN → "UNKNOWN")
+  │     ├─ pd.to_numeric() → číselné stĺpce (chyby → NaN)
+  │     └─ pd.to_datetime() → hour, dayofweek z unixTime
+  │
+  ├─► compute_statistics(df)
+  │     ├─ Spearman: groupby(year,week).size() → rho, p pre každý rok
+  │     ├─ Chi-square: pd.crosstab(crisis, category) → chi2, p, dof
+  │     ├─ Cramér V: sqrt(chi2 / (n * min_dim))
+  │     └─ Kruskal-Wallis: length skupiny podľa category → H, p
+  │
+  ├─► save_report(df, stats, outdir)
+  │     └─ report.txt: profil dát + top DV + výsledky testov
+  │
+  └─► make_plots(df, outdir)
+        ├─ visits_by_yearquartal.png  (čiarový graf)
+        ├─ heatmap_day_hour.png       (heatmapa 7×24)
+        ├─ heatmap_week_year.png      (heatmapa rok×53)
+        └─ top_category.png           (horizontálne stĺpce)
+END
+```
+
+---
+
+## Premenné v skripte – prehľad
+
+### Závislé premenné – DV (čo sa analyzuje / vysvetľuje)
+
+| Premenná | Popis | Typ hodnôt |
+|---|---|---|
+| `category` | Kategória navštíveného obsahu (z URL) | Kategoriálna |
+| `webPart` | Časť webu (z URL) | Kategoriálna |
+| `urlExt` | Prípona URL | Kategoriálna |
+
+### Nezávislé premenné – IV (čo vysvetľuje / predikuje)
+
+| Premenná | Popis | Typ hodnôt |
+|---|---|---|
+| `year` | Rok prístupu | Numerická |
+| `quartal` | Štvrťrok (1–4) | Numerická/Ordinálna |
+| `yearQuartal` | Rok + štvrťrok (napr. "2021Q1") | Kategoriálna/Ordinálna |
+| `week` | Číslo týždňa (1–53) | Numerická |
+| `hour` | Hodina dňa (0–23) – **odvodená** z `unixTime` | Numerická |
+| `dayofweek` | Deň v týždni (0=Po, 6=Ne) – **odvodená** z `unixTime` | Ordinálna |
+| `crisis` | Krízové / normálne obdobie | Binárna kategória |
+
+---
+
+## Otázky, ktoré môže položiť profesor
+
+**Q: Čo je DV a IV v tomto skripte?**
+A: **DV** (závislé/vysvetľované premenné) sú `category`, `webPart`, `urlExt` – charakterizujú navštívený obsah, odvodený z URL. **IV** (nezávislé/vysvetľujúce premenné) sú časové premenné: `year`, `quartal`, `week`, `hour`, `dayofweek`, `crisis`. Analyzujeme, či čas prístupu (IV) ovplyvňuje navštívený obsah (DV).
+
+---
+
+**Q: Prečo `sep=";"` pri čítaní CSV?**
+A: Štandardný CSV oddeľovač je čiarka, ale tento súbor používa bodkočiarku. Je to bežné v európskych exportoch, kde čiarka je desatinný oddeľovač čísel. Ak by sme nenastavili `sep=";"`, pandas by načítal celý riadok ako jeden stĺpec.
+
+---
+
+**Q: Prečo pri načítaní nastavujeme `errors="coerce"` pri `pd.to_numeric`?**
+A: Niektoré záznamy v CSV môžu mať v číselnom stĺpci textovú hodnotu (napr. `"-"` alebo `"N/A"`). `errors="coerce"` prevedie tieto neplatné hodnoty na `NaN` namiesto vyhodenia `ValueError`. Skript tak pokračuje a neplatné záznamy sa neskôr automaticky vylúčia pri `dropna()`.
+
+---
+
+**Q: Prečo sa Spearmanova korelácia počíta pre každý rok zvlášť?**
+A: Keby sme počítali jeden Spearman pre celé dátové obdobie (napr. 2015–2022), mohlo by dôjsť k tzv. Simpsonovmu paradoxu: v jednom roku návštevnosť rastie, v inom klesá, a celkový trend sa "vyzruší" – dostaneme $\rho \approx 0$, hoci v každom roku je silný trend. Počítaním per-rok vidíme skutočné trendy pre každé obdobie zvlášť.
+
+---
+
+**Q: Čo je monotónny vzťah a prečo sa meria Spearmanom?**
+A: Monotónny vzťah znamená, že keď $x$ rastie, $y$ buď **vždy rastie** (rastúci trend) alebo **vždy klesá** (klesajúci trend) – ale nie nutne lineárne. Spearman meria tento trend cez koreláciu **poradí** hodnôt, nie samotných hodnôt. Je odolný voči outlierom a nevyžaduje normálne rozdelenie.
+
+---
+
+**Q: Čo je kontingečná tabuľka a na čo slúži?**
+A: Kontingečná (krížová) tabuľka zobrazuje frekvencie kombinácií dvoch kategorických premenných. Riadky sú hodnoty premennej `crisis`, stĺpce sú hodnoty `category`, a bunky obsahujú počet záznamov pre každú kombináciu. Chi-square test overuje, či sú rozloženia frekvencií v riadkoch navzájom rovnaké (H0: nezávislosť).
+
+---
+
+**Q: Čo hovorí Chi-square test a čo Cramér V?**
+A: **Chi-square** povie iba ÁNO/NIE – existuje štatisticky významná závislosť medzi `crisis` a `category`? **Cramér V** povie AKO SILNÁ je táto závislosť (0 = žiadna, 1 = dokonalá). Chi-square samo o sebe nestačí, pretože pri veľkých vzorkách sa takmer vždy stane štatisticky významným, aj keď je závislosť prakticky zanedbateľná.
+
+---
+
+**Q: Prečo Kruskal-Wallis a nie jednosmerná ANOVA?**
+A: ANOVA predpokladá, že `length` je normálne rozdelená v každej kategórii. Dĺžka webových stránok typicky nie je normálne rozdelená – má výrazne zošikmené rozdelenie s dlhým pravým chvostom (veľa krátkych stránok, zopár veľmi dlhých). Kruskal-Wallis je neparametrický ekvivalent, ktorý nevyžaduje normalitu a pracuje s poradiami namiesto skutočných hodnôt.
+
+---
+
+**Q: Čo znamená p-hodnota v kontexte týchto testov?**
+A: P-hodnota je pravdepodobnosť, že by sme dostali rovnako extrémny (alebo extrémnejší) výsledok za predpokladu, že H0 je pravdivá. Štandardná hladina významnosti $\alpha = 0.05$: ak $p < 0.05$, zamietame H0. Dôležité: zamietnutie H0 neznamená, že závislosť je **prakticky** dôležitá – pri milióne záznamov môže byť aj triviálny vzťah štatisticky významný.
+
+---
+
+**Q: Čo je `normalize_text` a prečo je potrebná?**
+A: Textové stĺpce v reálnych logoch majú rôzne spôsoby zakódovania chýbajúcich hodnôt: `NaN` (pandas), prázdny reťazec `""`, alebo pomlčka `"-"`. Bez normalizácie by sa všetky tri počítali ako odlišné hodnoty, čo by skreslilo frekvenčné analýzy (napr. `value_counts()`). Funkcia ich zjednotí na jeden symbol `"UNKNOWN"`.
+
+---
+
+**Q: Prečo `unstack(fill_value=0)` pri heatmapách?**
+A: `groupby` vracia výsledky iba pre kombinácie, ktoré v dátach skutočne existujú. Napríklad ak v noci o 3:00 v nedeľu nebol žiadny prístup, táto kombinácia chýba. `unstack(fill_value=0)` prevedie dvojúrovňový index na maticu a vyplní chýbajúce kombinácie nulou – inak by `imshow()` pri kreslení heatmapy zlyhalo alebo by heatmapa mala nesprávny tvar.
+
+---
+
+**Q: Čo je štatistická a čo praktická významnosť?**
+A: **Štatistická významnosť** (p < 0.05) hovorí, že výsledok pravdepodobne nie je náhoda. **Praktická významnosť** (Cramér V, veľkosť efektu) hovorí, ako silný je vzťah v praxi. Pri tisíckach záznamov môže byť aj veľmi slabý vzťah štatisticky významný. Preto sa uvádza aj Cramér V – dáva kontext, či je závislosť len "štatistický artefakt veľkej vzorky" alebo skutočne relevantný vzťah.
+
+---
+
+## Zhrnutie funkcií
+
+| Funkcia | Vstup | Výstup | Účel |
+|---|---|---|---|
+| `build_arg_parser()` | – | `ArgumentParser` | CLI argumenty (`--input`, `--outdir`) |
+| `normalize_text(series)` | pandas Series | pandas Series | Zjednotí chýbajúce hodnoty na `"UNKNOWN"` |
+| `ensure_outdir(outdir)` | `Path` | – | Vytvorí výstupný priečinok |
+| `load_data(input_path)` | `Path` | `DataFrame` | Načíta CSV, normalizuje, odvodí `hour`+`dayofweek` |
+| `compute_statistics(df)` | `DataFrame` | `dict` | Spearman + Chi2+CramérV + Kruskal-Wallis |
+| `save_report(df, stats, outdir)` | `DataFrame`, `dict`, `Path` | `report.txt` | Textový report |
+| `make_plots(df, outdir)` | `DataFrame`, `Path` | 4× PNG | Grafy návštevnosti a aktivity |
+| `main()` | – | – | Orchestrátor celej analýzy |
+
+---
+
+## Zhrnutie štatistických metód
+
+| Test | IV (vstup) | DV (výstup) | Čo meria | Výsledok |
+|---|---|---|---|---|
+| **Spearman** | poradie týždňa | počet návštev | Monotónny trend návštevnosti v čase | $\rho$, p-hodnota |
+| **Chi-square** | `crisis` (binárna) | `category` (kat.) | Závislosť obsahu od krízového obdobia | $\chi^2$, p-hodnota, df |
+| **Cramér V** | (z Chi-square) | (z Chi-square) | Sila závislosti crisis ↔ category | $V \in \langle 0, 1 \rangle$ |
+| **Kruskal-Wallis** | `category` (skupiny) | `length` (číselná) | Rozdiel dĺžky obsahu medzi kategóriami | $H$, p-hodnota |
