@@ -725,6 +725,45 @@ END
 
 ## Otázky, ktoré môže položiť profesor
 
+**Q: Čo hovoria konkrétne výsledky Spearmana (rok 2009–2012)?**
+A: Počítali sme monotónny trend návštevnosti podľa týždňov zvlášť pre každý rok.
+- **2009: rho=-0.24, p=0.079** → nevýznamné. Mierne klesajúci trend, ale p > 0.05 – nemôžeme zamietnuť H0. Výsledok môže byť náhoda.
+- **2010: rho=-0.13, p=0.338** → nevýznamné. Prakticky žiadny trend, p ďaleko od 0.05.
+- **2011: rho=-0.52, p=0.000056** → **významné**. Stredne silný klesajúci trend – návštevnosť počas roka 2011 preukázateľne klesala (rho záporné, p < 0.05).
+- **2012: rho=+0.21, p=0.134** → nevýznamné. Mierne rastúci trend, ale nespoľahlivý.
+
+Celkový záver: trend návštevnosti je **nestabilný** – každý rok sa správa inak, čo môže odrážať vplyv finančnej krízy alebo zmeny v správaní používateľov.
+
+---
+
+**Q: Čo hovorí výsledok Chi-square + Cramér V (chi2=42140, V=0.22)?**
+A: Test overoval, či krízové obdobie (`crisis`) ovplyvňuje, aký obsah (`category`) ľudia navštevujú.
+- **p ≈ 0** → závislosť existuje a určite nie je náhoda (zamietame H0).
+- **V = 0.22** → závislosť je **slabá až stredná** (okolo 0.1 = slabá, 0.3 = stredná, 0.5 = silná).
+
+Interpretácia: krízové obdobie (2009–2010) mierne zmenilo, čo ľudia na webe banky navštevovali, ale zmena nebola dramatická. Napríklad mohla vzrásť návštevnosť kategórií ako "Pricing List" alebo "Business Conditions" počas krízy. Cramér V = 0.22 hovorí, že väčšina návštevnosti prebiehala podobne v oboch obdobiach.
+
+---
+
+**Q: Čo hovorí výsledok Kruskal-Wallis (H=19723, p≈0)?**
+A: Test overoval, či sa dĺžka obsahu (`length`) líši medzi kategóriami webu.
+- **p ≈ 0** → áno, líši sa, a nie je to náhoda.
+- **H = 19723** → veľmi vysoká hodnota štatistiky, čo zodpovedá obrovskej vzorke (884 tisíc záznamov).
+
+Konkrétne rozdiely vidíme v sekcii 7: **Reputation má priemer 11.5**, ostatné kategórie 6–8. Kruskal-Wallis hovorí len "niečo sa líši" – ktoré dvojice sa líšia by ukázal post-hoc Dunn test.
+
+---
+
+**Q: Prečo sú mediány `length` väčšinou 0 alebo veľmi nízke, hoci priemery sú 7–11?**
+A: `length` má **extrémne zošikmené rozdelenie** (vidíme to na histograme a Q-Q plote). Väčšina prístupov trvá veľmi krátko (0 sekúnd – rýchle presmerenia, cachovanie, chybové odpovede), ale zopár trvá veľmi dlho. Medián = 0 znamená, že **viac ako polovica prístupov** má length = 0. Priemer je vytiahnutý nahor tými dlhými prístupmi. Preto je medián lepšou mierou "typického" prístupu ako priemer, a preto používame Kruskal-Wallis (pracuje s mediánmi/poradiami) namiesto ANOVA (pracuje s priemery).
+
+---
+
+**Q: Prečo sú CV hodnoty také vysoké (170–220 %)?**
+A: CV > 100 % znamená, že štandardná odchýlka je väčšia ako priemer – dáta sú extrémne heterogénne. Napríklad kategória *Reputation* má priemer 11.5 a std 21.8 → CV = 189 %. To je dôsledok toho istého problému ako vyššie: distribúcia length má dlhý pravý chvost s extrémne vysokými hodnotami, ktoré nafukujú std. CV > 35 % = vysoká variabilita – tu sme rádovo nad tým vo všetkých kategóriách.
+
+---
+
 **Q: Čo je DV a IV v tomto skripte?**
 A: **DV** (závislé/vysvetľované premenné) sú `category`, `webPart`, `urlExt` – charakterizujú navštívený obsah, odvodený z URL. **IV** (nezávislé/vysvetľujúce premenné) sú časové premenné: `year`, `quartal`, `week`, `hour`, `dayofweek`, `crisis`. Analyzujeme, či čas prístupu (IV) ovplyvňuje navštívený obsah (DV).
 
