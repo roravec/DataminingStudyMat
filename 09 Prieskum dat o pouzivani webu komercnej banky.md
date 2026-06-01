@@ -872,3 +872,69 @@ A: **Štatistická významnosť** (p < 0.05) hovorí, že výsledok pravdepodobn
 | **Chi-square** | `crisis` (binárna) | `category` (kat.) | Závislosť obsahu od krízového obdobia | $\chi^2$, p-hodnota, df |
 | **Cramér V** | (z Chi-square) | (z Chi-square) | Sila závislosti crisis ↔ category | $V \in \langle 0, 1 \rangle$ |
 | **Kruskal-Wallis** | `category` (skupiny) | `length` (číselná) | Rozdiel dĺžky obsahu medzi kategóriami | $H$, p-hodnota |
+
+---
+
+## Rychle tahaky na obhajobu (30-sekundove odpovede)
+
+Pouzi tieto odpovede, ked profesor polozi jednoduchu kontrolnu otazku a ocakava jasnu, kratku reakciu.
+
+**1) Co je ciel tejto analyzy?**  
+Zistit, ako sa meni navstevnost v case a ci casove faktory (rok, tyzden, crisis, den, hodina) suvisia s tym, aky obsah ludia navstevuju.
+
+**2) Co je rozdiel Spearman vs aktivita den v tyzdni?**  
+Spearman meria trend v case (ci navstevnost pocas tyzdnov roka rastie/klesa). Aktivita den v tyzdni je len frekvencia navstev pre Po-Ne.
+
+**3) Co je x a y pri Spearmanovi?**  
+x = poradie tyzdna v roku, y = pocet navstev v tom tyzdni.
+
+**4) Preco Spearman a nie Pearson?**  
+Pretoze navstevnost nie je idealne normalna/linearna a ma outliery. Spearman je robustnejsi.
+
+**5) Preco Spearman pocitam po rokoch zvlast?**  
+Lebo roky mozu mat opacny trend. Pri spojeni by sa trendy mohli vykompenzovat a vysledok by bol klamlivy.
+
+**6) Co znamena rho?**  
+rho > 0 rastuci trend, rho < 0 klesajuci trend, rho blizko 0 bez trendu.
+
+**7) Co znamena p-hodnota?**  
+Ci je vysledok statisticky vyznamny. Pri p < 0.05 zamietam H0.
+
+**8) Co testuje Chi-square (crisis vs category)?**  
+Ci navstivena kategoria zavisi od krizoveho obdobia.
+
+**9) Preco po Chi-square uvadzam aj Cramer V?**  
+Chi-square povie, ze zavislost existuje. Cramer V povie, aka je silna.
+
+**10) Co testuje Kruskal-Wallis?**  
+Ci sa hodnoty `length` lisia medzi kategoriami obsahu.
+
+**11) Preco Kruskal-Wallis a nie ANOVA?**  
+Lebo `length` nie je normalne rozdelena (dlhy pravy chvost). Kruskal je neparametricky.
+
+**12) Co je CV?**  
+CV = std/mean*100 %. Je to relativna variabilita medzi kategoriami.
+
+**13) Preco moze byt median skoro 0, ale priemer vyssi?**  
+Lebo vela navstev je velmi kratkych, ale mala cast je velmi dlha a vytahuje priemer.
+
+**14) Preco filtrujem `urlExt == ".html"`?**  
+Aby som analyzoval hlavny webovy obsah pre uzivatela, nie zmiesane typy suborov (pdf, zip, ...).
+
+**15) Preco filtrujem `internal != "1"`?**  
+Aby som odstranil internu automatizovanu prevadzku, ktora robi umele nocne peaky a skresluje realne spravanie klientov.
+
+**16) Co su peak hodiny a peak dni?**  
+Hodiny/dni, kde aktivita dosahuje aspon 80 % maxima.
+
+**17) Co ukazuje heatmapa den x hodina?**  
+Kedy je prevadzka najsilnejsia pocas tyzdna a dna; typicky pracovne dni a pracovne hodiny.
+
+**18) Jedna veta o limite analyzy:**  
+Ide o observacnu analyzu logov, preto statisticka vyznamnost neznamena kauzalitu.
+
+**19) Jedna veta o metodike:**  
+Najprv cistim data na realne uzivatelske spravanie, potom kombinujem test trendu, test zavislosti a test rozdielov medzi skupinami.
+
+**20) Bezpecna univerzalna veta, ked sa zaseknes:**  
+Kazdy test odpoveda na inu otazku: Spearman = trend, Chi-square/Cramer V = zavislost a sila zavislosti, Kruskal = rozdiely medzi kategoriami.
