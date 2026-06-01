@@ -57,16 +57,22 @@ logs5.csv  ──►  analyze.py  ──►  analysis_output_simple/
                                      ├── visits_by_yearquartal.png
                                      ├── heatmap_day_hour.png
                                      ├── heatmap_week_year.png
-                                     └── top_category.png
+                                     ├── top_category.png
+                                     ├── boxplot_length_category.png
+                                     ├── histogram_length.png
+                                     └── qq_length.png
 ```
 
 | Súbor | Obsah |
 |---|---|
-| `report.txt` | Textový report: profil dát, top hodnoty DV, výsledky 3 štat. testov |
+| `report.txt` | Textový report: profil dát, top DV, štat. testy, deskriptívna štatistika |
 | `visits_by_yearquartal.png` | Čiarový graf návštevnosti po štvrťrokoch (IV → DV trend) |
 | `heatmap_day_hour.png` | Heatmapa: aktivita podľa dňa v týždni × hodiny dňa |
 | `heatmap_week_year.png` | Heatmapa: aktivita podľa týždňa × roka |
 | `top_category.png` | Horizontálny stĺpcový graf top kategórií obsahu |
+| `boxplot_length_category.png` | Boxploty dĺžky obsahu (length) pre top 6 kategórií |
+| `histogram_length.png` | Histogram rozdelenia length (log-škála na osi Y) |
+| `qq_length.png` | Q-Q plot length – vizuálna kontrola normality rozdelenia |
 
 ---
 
@@ -191,6 +197,17 @@ df["dayofweek"] = ts.dt.dayofweek   # 0=pondelok ... 6=nedeľa
 
 Tieto dve nové premenné (`hour`, `dayofweek`) sú **odvodené IV** – nevyskytujú sa priamo v CSV, ale vytvárame ich z existujúceho stĺpca `unixTime`.
 
+#### Filtrácia – vyčistená vzorka
+
+```python
+df = df[df["urlExt"] == ".html"].copy()
+```
+
+- `df["urlExt"] == ".html"` – booleovská maska: `True` pre riadky s HTML príponou
+- `.copy()` – zabráni varovaniu `SettingWithCopyWarning` (nový samostatný DataFrame)
+
+**Prečo filtrovať na HTML?** Analýza sa zameriava na obsah webstránok. PDF súbory, ZIP archívy a iné typy majú iný charakter – ich zahrnutie by skreslilo distribúciu `category` a štatistické testy. Vyčistená vzorka obsahuje výlučne HTML stránky.
+
 ---
 
 ### 4. Výpočet štatistík – `compute_statistics()`
@@ -291,6 +308,42 @@ h_stat, p_val = scipy_stats.kruskal(*groups)
 
 ---
 
+#### 4d. Deskriptívna štatistika – length podľa category
+
+**Otázka:** Líšia sa distribúcie dĺžky obsahu medzi kategóriami? Aká je variabilita?
+
+```python
+for cat, grp in desc_df.groupby("category"):
+    vals       = grp["length"].to_numpy(dtype=float)
+    mean_val   = float(np.mean(vals))
+    median_val = float(np.median(vals))
+    std_val    = float(np.std(vals, ddof=1))
+    cv_val     = float(std_val / mean_val * 100.0) if mean_val != 0.0 else None
+```
+
+- `np.mean(vals)` – aritmetický priemer
+- `np.median(vals)` – medián (stredná hodnota po zoradení) – robustnejší voči outlierom
+- `np.std(vals, ddof=1)` – štandardná odchýlka (**ddof=1** = výberová, nie populačná)
+- `cv_val` = koeficient variácie (CV): $CV = \frac{std}{mean} \times 100\,[\%]$
+
+**Prečo CV a nie iba std?** Štandardná odchýlka závisí od jednotiek a veľkosti priemeru – ťažko porovnať skupiny s rôznymi priemermi. CV je bezrozmerné číslo, vhodné na porovnanie variability medzi kategóriami.
+
+---
+
+#### 4e. Časové vzorce – peak hodiny a dni
+
+```python
+hour_counts = df.dropna(subset=["hour"]).groupby("hour").size()
+hour_thresh = hour_counts.max() * 0.80
+peak_hours  = sorted(int(h) for h in hour_counts[hour_counts >= hour_thresh].index)
+```
+
+- Každá hodina dňa dostane počet záznamov (`groupby("hour").size()`)
+- Prah 80 % maxima oddelí "peak" hodiny od okrajových
+- Výsledok sa uloží do `stats["peak_hours"]` a vypíše v sekcii 8 reportu
+
+---
+
 ### 5. Uloženie reportu – `save_report()`
 
 Funkcia zostaví textový report do zoznamu riadkov a zapíše ho do súboru:
@@ -344,6 +397,40 @@ ax.invert_yaxis()
 ```
 - `barh` – horizontálne stĺpce (lepšia čitateľnosť dlhých názvov kategórií)
 - `.invert_yaxis()` – najčastejšia kategória bude hore (nie dole)
+
+#### Graf 5: Boxplot length podľa kategórií
+
+```python
+top_cats_bp = df["category"].value_counts(dropna=False).head(6).index.tolist()
+ax.boxplot(bp_data, labels=bp_labels, vert=True, showfliers=False)
+```
+
+- Berieme len **top 6 kategórií** – viac by zneprehľadnilo os X
+- `showfliers=False` – skryje extrémne outliere (inak by zahlcovali graf)
+- Boxplot zobrazuje: medián (čiara), medzikvartilový rozsah IQR (obdĺžnik), fúzy (1,5×IQR)
+
+#### Graf 6: Histogram length
+
+```python
+ax.hist(hist_vals, bins=60, edgecolor="none", color="steelblue")
+ax.set_yscale("log")
+```
+
+- `bins=60` – 60 rovnako širokých intervalov
+- `set_yscale("log")` – logaritmická škála na osi Y, pretože `length` má výrazne asymetrické rozdelenie s dlhým pravým chvostom
+
+#### Graf 7: Q-Q plot (kontrola normality)
+
+```python
+qq_result           = scipy_stats.probplot(qq_vals, dist="norm")
+osm, osr            = qq_result[0]   # teoretické a vzorkové kvantily
+slope, intercept, _ = qq_result[1]   # parametre fitovanej priamky
+```
+
+- `scipy_stats.probplot` – vypočíta párové kvanty: teoretické (z normálneho rozdelenia) vs. vzorkové (z dát)
+- Ak body ležia na červenej priamke → dáta sú normálne rozdelené
+- Odchýlky (typicky na chvostoch) ukazujú, kde normalita zlyháva
+- Vzorka: max 5 000 bodov kvôli rýchlosti (`rng.choice(..., size=5000)`)
 
 ---
 
@@ -456,6 +543,44 @@ kde $k$ = počet skupín, $n_i$ = veľkosť $i$-tej skupiny, $R_i$ = súčet por
 
 ---
 
+### 5. Koeficient variácie (CV)
+
+$$
+CV = \frac{\sigma}{|\bar{x}|} \times 100\,[\%]
+$$
+
+kde $\sigma$ = štandardná odchýlka (výberová, ddof=1), $\bar{x}$ = aritmetický priemer.
+
+**Čo meria:** Relatívnu variabilitu – koľko percent priemeru tvorí odchýlka. Vhodné pre porovnanie skupín s rôznymi priemermi.
+
+**Orientačné hodnoty:**
+
+| CV | Interpretácia |
+|---|---|
+| < 15 % | Nízka variabilita (homogénne hodnoty) |
+| 15–35 % | Stredná variabilita |
+| > 35 % | Vysoká variabilita (heterogénne hodnoty) |
+
+**Prečo CV a nie iba štandardná odchýlka?** Štandardná odchýlka je viazaná na jednotky a veľkosť priemeru. Napr. kategória s priemerom `length = 1000` a `std = 500` vs. kategória s priemerom `100` a `std = 80` – std samotné nám nepovie, ktorá je „variabilnejšia". CV (50 % vs. 80 %) to normalizuje.
+
+---
+
+### 6. Q-Q plot (Quantile-Quantile)
+
+**Čo je:** Grafická metóda na kontrolu, či distribúcia dát zodpovedá teoretickému rozdeleniu (zvyčajne normálnemu).
+
+**Ako funguje:**
+1. Zoradíme dáta od najmenšej po najväčšiu hodnotu → vzorkové kvanty
+2. Vypočítame očakávané kvanty pre normálne rozdelenie s rovnakým n → teoretické kvanty
+3. Vykreslíme páry (teoretický kvantil, vzorkový kvantil) ako body
+4. Ak dáta sú normálne, body ležia na priamke
+
+**Interpretácia:**
+- Body na červenej priamke → normalita → ANOVA by bola vhodná
+- S-krivka (ohnutie na chvostoch) → ťažšie chvosty → distribúcia nie je normálna → správny výber je Kruskal-Wallis
+
+---
+
 ## Vysvetlenie kľúčových operácií v kóde
 
 ### `groupby` + `size()` vs `value_counts()`
@@ -546,22 +671,28 @@ START
   │     ├─ pd.read_csv() → načíta 12 stĺpcov
   │     ├─ normalize_text() → textové stĺpce (NaN → "UNKNOWN")
   │     ├─ pd.to_numeric() → číselné stĺpce (chyby → NaN)
-  │     └─ pd.to_datetime() → hour, dayofweek z unixTime
+  │     ├─ pd.to_datetime() → hour, dayofweek z unixTime
+  │     └─ filter urlExt == ".html" → len HTML stránky (vyčistená vzorka)
   │
   ├─► compute_statistics(df)
   │     ├─ Spearman: groupby(year,week).size() → rho, p pre každý rok
   │     ├─ Chi-square: pd.crosstab(crisis, category) → chi2, p, dof
   │     ├─ Cramér V: sqrt(chi2 / (n * min_dim))
-  │     └─ Kruskal-Wallis: length skupiny podľa category → H, p
+  │     ├─ Kruskal-Wallis: length skupiny podľa category → H, p
+  │     ├─ Deskriptívna štatistika: mean, median, std, CV% pre každú category
+  │     └─ Peak hodiny/dni: hodiny/dni s aktivitou > 80 % maxima
   │
   ├─► save_report(df, stats, outdir)
   │     └─ report.txt: profil dát + top DV + výsledky testov
   │
   └─► make_plots(df, outdir)
-        ├─ visits_by_yearquartal.png  (čiarový graf)
-        ├─ heatmap_day_hour.png       (heatmapa 7×24)
-        ├─ heatmap_week_year.png      (heatmapa rok×53)
-        └─ top_category.png           (horizontálne stĺpce)
+        ├─ visits_by_yearquartal.png      (čiarový graf)
+        ├─ heatmap_day_hour.png           (heatmapa 7×24)
+        ├─ heatmap_week_year.png          (heatmapa rok×53)
+        ├─ top_category.png               (horizontálne stĺpce)
+        ├─ boxplot_length_category.png    (boxploty top 6 kategórií)
+        ├─ histogram_length.png           (histogram length, log-škála Y)
+        └─ qq_length.png                  (Q-Q plot kontrola normality)
 END
 ```
 
@@ -595,6 +726,31 @@ END
 
 **Q: Čo je DV a IV v tomto skripte?**
 A: **DV** (závislé/vysvetľované premenné) sú `category`, `webPart`, `urlExt` – charakterizujú navštívený obsah, odvodený z URL. **IV** (nezávislé/vysvetľujúce premenné) sú časové premenné: `year`, `quartal`, `week`, `hour`, `dayofweek`, `crisis`. Analyzujeme, či čas prístupu (IV) ovplyvňuje navštívený obsah (DV).
+
+---
+
+**Q: Prečo skript filtruje len HTML stránky?**
+A: Analýza sa zameriava na obsah webstránok charakterizovaný premennými `category` a `webPart`, ktoré sú odvodené z URL HTML stránok. Zahrnutie PDF, ZIP a iných typov by skreslilo distribúciu týchto kategoriálnych premenných, pretože majú iný charakter prístupu. Vyčistená vzorka = len `urlExt == ".html"`.
+
+---
+
+**Q: Čo je koeficient variácie (CV) a prečo ho používame?**
+A: CV = std / mean × 100 [%]. Udáva, koľko percent priemeru tvorí štandardná odchýlka – ide o relatívnu mieru variability. Používame ho preto, lebo rôzne kategórie obsahu môžu mať výrazne odlišné priemery `length`, a porovnávanie absolútnych `std` by bolo zavádzajúce. CV normalizuje variabilitu a umožňuje spravodlivé porovnanie skupín.
+
+---
+
+**Q: Čo nám hovorí Q-Q plot pre length?**
+A: Q-Q plot porovnáva vzorkové kvanty dát s teoretickými kvantami normálneho rozdelenia. Ak body ležia na červenej priamke, dáta sú normálne rozdelené. V praxi `length` vykazuje výrazné odchýlky na chvostoch (ťažký pravý chvost), čo potvrdzuje, že použitie Kruskal-Wallisovho testu namiesto ANOVA bolo správne – ANOVA predpokladá normalitu.
+
+---
+
+**Q: Prečo boxplot zobrazuje len top 6 kategórií?**
+A: Dataset obsahuje viac kategórií, ale pri viac ako 6–8 skupinách by sa popisky na osi X prekrývali a boxplot by bol nečitateľný. Top 6 podľa počtu záznamov pokrýva najdôležitejší obsah.
+
+---
+
+**Q: Čo vidíme v heatmape hodina × deň v týždni?**
+A: Masívnu koncentráciu aktivity počas pracovných hodín (typicky 8:00–17:00) a pracovných dní (pondelok–piatok). Víkendová a nočná aktivita je minimálna. Toto odráža, že web komerčnej banky využívajú hlavne firemní/profesionálni používatelia počas pracovnej doby.
 
 ---
 
